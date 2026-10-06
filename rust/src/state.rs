@@ -2,10 +2,10 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use crate::ai::{HttpStatus, RateLimited, Usage};
-use crate::hw::Hardware;
-use crate::view::HIST_LEN;
-use crate::weather::Weather;
+use crate::sources::ai::{HttpStatus, RateLimited, Usage};
+use crate::sensors::Hardware;
+use crate::ui::HIST_LEN;
+use crate::sources::weather::Weather;
 
 pub const AI_NAMES: [&str; 3] = ["Claude", "Codex", "Antigravity"];
 

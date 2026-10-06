@@ -15,9 +15,9 @@ use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_ABANDONED, WAIT_OBJEC
 use windows::Win32::System::Threading::{CreateMutexW, ReleaseMutex, WaitForSingleObject};
 
 const LIB: &str = r"C:\Program Files\PawnIO\PawnIOLib.dll";
-const INTEL_MSR: &[u8] = include_bytes!("../../pawnio_modules/IntelMSR.bin");
-const LPC_IO: &[u8] = include_bytes!("../../pawnio_modules/LpcIO.bin");
-const SMBUS_I801: &[u8] = include_bytes!("../../pawnio_modules/SmbusI801.bin");
+const INTEL_MSR: &[u8] = include_bytes!("../../../pawnio_modules/IntelMSR.bin");
+const LPC_IO: &[u8] = include_bytes!("../../../pawnio_modules/LpcIO.bin");
+const SMBUS_I801: &[u8] = include_bytes!("../../../pawnio_modules/SmbusI801.bin");
 
 type OpenFn = unsafe extern "system" fn(*mut *mut c_void) -> i32;
 type LoadFn = unsafe extern "system" fn(*mut c_void, *const u8, usize) -> i32;
