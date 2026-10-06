@@ -1,0 +1,7 @@
+rust/target/
+rust/preview*.png
+rust/mascot_frames/
+rust/jpeg_check*
+assets/mascots/
+__pycache__/
+*.log
