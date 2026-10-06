@@ -307,17 +307,19 @@ pub fn uninstall(purge: bool) -> Result<String> {
         let _ = std::fs::remove_dir_all(config::dir());
         let _ = std::fs::remove_dir_all(PathBuf::from(std::env::var("LOCALAPPDATA").unwrap_or_default()).join("TurzxDashboard"));
     }
-    // a running exe cannot delete itself: cmd keeps trying (up to a minute) until we have exited
+    // a running exe cannot be deleted, but it can be moved: park it in %TEMP% (deleted at the
+    // next reboot when we may) and remove the folder now
     let dir = install_dir();
     if running_installed() {
-        let d = dir.display();
-        let script = format!(
-            "for /L %i in (1,1,60) do (rmdir /s /q \"{d}\" 2>nul & if not exist \"{d}\" (exit /b) else (ping -n 2 127.0.0.1 >nul))"
-        );
-        let _ = Command::new("cmd").arg("/C").raw_arg(script).creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS).spawn();
-    } else {
-        let _ = std::fs::remove_dir_all(&dir);
+        let parked = std::env::temp_dir().join(format!("turzx-dashboard-removed-{}.exe", std::process::id()));
+        if std::fs::rename(installed_exe(), &parked).is_ok() {
+            use windows::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_DELAY_UNTIL_REBOOT};
+            unsafe {
+                let _ = MoveFileExW(&HSTRING::from(parked.as_os_str()), PCWSTR::null(), MOVEFILE_DELAY_UNTIL_REBOOT);
+            }
+        }
     }
+    let _ = std::fs::remove_dir_all(&dir);
     log::info!("uninstalled (purge: {purge})");
     Ok(format!(
         "{APP} is uninstalled.{}",
