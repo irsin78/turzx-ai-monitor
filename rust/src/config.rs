@@ -129,13 +129,15 @@ impl Config {
         }
     }
 
-    /// Korean air-quality grades (true) or US AQI (false).
+    /// Korean air-quality grades (true) or US AQI (false); resolved once (settings changes
+    /// restart the process).
     pub fn korean_air_scale(&self) -> bool {
-        match self.air_quality.scale.trim().to_ascii_lowercase().as_str() {
+        static K: OnceLock<bool> = OnceLock::new();
+        *K.get_or_init(|| match self.air_quality.scale.trim().to_ascii_lowercase().as_str() {
             "kr" => true,
             "us" => false,
             _ => windows_region().as_deref() == Some("KR"),
-        }
+        })
     }
 }
 

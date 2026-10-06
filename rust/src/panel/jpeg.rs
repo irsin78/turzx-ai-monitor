@@ -227,7 +227,11 @@ impl RowJpeg {
     pub fn encode(&mut self, pm: &Pixmap, bands: Range<usize>) {
         // The same code compiled for AVX2 (8 floats per instruction) when the CPU has it
         #[cfg(target_arch = "x86_64")]
-        if std::arch::is_x86_feature_detected!("avx2") && std::arch::is_x86_feature_detected!("fma") {
+        if std::arch::is_x86_feature_detected!("avx2")
+            && std::arch::is_x86_feature_detected!("fma")
+            && std::arch::is_x86_feature_detected!("bmi2")
+            && std::arch::is_x86_feature_detected!("lzcnt")
+        {
             // SAFETY: the CPU supports the features enabled for encode_avx2
             return unsafe { self.encode_avx2(pm, bands) };
         }

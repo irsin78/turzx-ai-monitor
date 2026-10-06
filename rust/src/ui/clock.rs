@@ -55,12 +55,13 @@ pub(super) fn draw_calendar(cv: &mut Canvas, now: &DateTime<Local>, x: f32, y: f
         let (ny, nm) = if now.month() == 12 { (now.year() + 1, 1) } else { (now.year(), now.month() + 1) };
         chrono::NaiveDate::from_ymd_opt(ny, nm, 1).unwrap().pred_opt().unwrap().day() as usize
     };
+    let holidays = crate::sources::holidays::month(now.year(), now.month());
     for day in 1..=days {
         let cell = lead + day - 1;
         let (r, i) = (cell / 7, cell % 7);
         let cy = y + 70.0 + r as f32 * 27.0;
         let cx = x + cw * i as f32 + cw / 2.0;
-        let red = i == 0 || is_holiday(now.year(), now.month(), day as u32);
+        let red = i == 0 || holidays & (1 << day) != 0;
         let mut color = if red { SUNDAY } else if i == 6 { SATURDAY } else { INK };
         if day as u32 == now.day() {
             cv.rect(cx - 15.0, cy - 13.0, cx + 15.0, cy + 13.0, ACCENT);

@@ -40,7 +40,7 @@ pub const HIST_KEYS: [&str; 13] = [
     "cpu_temp", "ram_temp", "gpu_temp", "vram_temp",
 ];
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct State {
     pub hw: Hardware,
     pub weather: Option<Weather>,

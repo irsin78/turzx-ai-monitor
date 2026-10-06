@@ -160,19 +160,19 @@ pub fn run(cmd: &str) -> Result<()> {
             let n = 240u32;
             let names = ["redraw+full encode (1/s)", "restore band", "mascots", "encode band", "assemble frame"];
             let mut t = [Duration::ZERO; 5];
-            let mut base = ui::render(&st, chrono::Local::now());
-            let mut work = base.clone();
+            let mut work = ui::render(&st, chrono::Local::now());
+            let mut backup = Vec::new();
             for i in 0..n {
                 let s0 = std::time::Instant::now();
                 let fresh = i % 12 == 0;
                 if fresh {
-                    base = ui::render(&st, chrono::Local::now());
-                    work = base.clone();
+                    work = ui::render(&st, chrono::Local::now());
+                    work.save_columns(cols.clone(), &mut backup);
                     enc.encode(work.pixmap(), 0..jpeg::BANDS);
                 }
                 let s1 = std::time::Instant::now();
                 if !fresh {
-                    work.restore_columns(&base, cols.clone());
+                    work.load_columns(cols.clone(), &backup);
                 }
                 let s2 = std::time::Instant::now();
                 m.update(1.0 / 12.0, &areas);

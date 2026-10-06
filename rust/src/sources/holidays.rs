@@ -61,12 +61,23 @@ fn korea(y: i32, m: u32, d: u32) -> bool {
     HOLIDAYS.binary_search(&(y as u16, m as u8, d as u8)).is_ok()
 }
 
-/// Holiday dates by (country, year); None while the year is being fetched or after a failure.
-type Years = HashMap<(String, i32), Option<HashSet<(u32, u32)>>>;
+/// One country-year: loading, the holiday dates, or a failure with a time to try again.
+enum Year {
+    Loading,
+    Ready(HashSet<(u32, u32)>),
+    Failed(std::time::Instant),
+}
+
+type Years = HashMap<i32, Year>;
 
 fn years() -> &'static Mutex<Years> {
     static Y: OnceLock<Mutex<Years>> = OnceLock::new();
     Y.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn country() -> Option<&'static str> {
+    static C: OnceLock<Option<String>> = OnceLock::new();
+    C.get_or_init(|| config::get().holiday_country()).as_deref()
 }
 
 fn cache_file(country: &str, year: i32) -> std::path::PathBuf {
@@ -90,9 +101,9 @@ fn parse(json: &str) -> Option<HashSet<(u32, u32)>> {
 }
 
 /// Load one year from the cache file, or download it (on a background thread).
-fn fetch(country: String, year: i32) {
+fn fetch(country: &'static str, year: i32) {
     std::thread::spawn(move || {
-        let file = cache_file(&country, year);
+        let file = cache_file(country, year);
         let days = std::fs::read_to_string(&file).ok().and_then(|t| parse(&t)).or_else(|| {
             let url = format!("https://date.nager.at/api/v3/PublicHolidays/{year}/{country}");
             let text = ureq::get(&url).call().ok()?.body_mut().read_to_string().ok()?;
@@ -102,28 +113,34 @@ fn fetch(country: String, year: i32) {
             log::info!("holidays {country} {year}: {} days", days.len());
             Some(days)
         });
-        if days.is_none() {
-            log::warn!("holidays {country} {year}: not available");
-        }
-        years().lock().unwrap().insert((country, year), days);
+        let state = match days {
+            Some(d) => Year::Ready(d),
+            None => {
+                log::warn!("holidays {country} {year}: not available, trying again later");
+                Year::Failed(std::time::Instant::now())
+            }
+        };
+        years().lock().unwrap().insert(year, state);
     });
 }
 
-pub fn is_holiday(y: i32, m: u32, d: u32) -> bool {
-    static COUNTRY: OnceLock<Option<String>> = OnceLock::new();
-    let Some(country) = COUNTRY.get_or_init(|| config::get().holiday_country()) else { return false };
+/// Holidays of a month as a bit set: bit `d` is day `d` (1..=31).
+pub fn month(y: i32, m: u32) -> u32 {
+    let Some(country) = country() else { return 0 };
     if country == "KR" {
-        return korea(y, m, d);
+        return (1..=31).filter(|&d| korea(y, m, d)).fold(0, |acc, d| acc | 1 << d);
     }
+    const RETRY: std::time::Duration = std::time::Duration::from_secs(600);
     let mut map = years().lock().unwrap();
-    match map.get(&(country.clone(), y)) {
-        Some(Some(days)) => days.contains(&(m, d)),
-        Some(None) => false, // being fetched, or unavailable
-        None => {
-            map.insert((country.clone(), y), None);
+    match map.get(&y) {
+        Some(Year::Ready(days)) => days.iter().filter(|(mm, _)| *mm == m).fold(0, |acc, (_, d)| acc | 1 << d),
+        Some(Year::Loading) => 0,
+        Some(Year::Failed(at)) if at.elapsed() < RETRY => 0,
+        _ => {
+            map.insert(y, Year::Loading);
             drop(map);
-            fetch(country.clone(), y);
-            false
+            fetch(country, y);
+            0
         }
     }
 }

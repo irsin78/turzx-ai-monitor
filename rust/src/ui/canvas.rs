@@ -80,28 +80,33 @@ pub(super) fn ko(size: f32, bold: bool) -> Font_ {
 
 type Scaled = ab_glyph::PxScaleFont<&'static FontRef<'static>>;
 
-impl Font_ {
-    /// Fonts to try for each character, preferred first.
-    fn chain(&self) -> Vec<&'static FontRef<'static>> {
+/// Fonts to try for each character, preferred first, per face (built once).
+fn chains() -> &'static [Vec<&'static FontRef<'static>>; 5] {
+    static C: OnceLock<[Vec<&'static FontRef<'static>>; 5]> = OnceLock::new();
+    C.get_or_init(|| {
         let f = fonts();
-        let bold = matches!(self.face, Face::KoBold | Face::NumSemi);
-        let (system, noto) = (f.system.as_ref().map(|s| if bold { &s.1 } else { &s.0 }), if bold { &f.noto_bold } else { &f.noto });
-        let mut v = Vec::with_capacity(4);
-        match self.face {
-            Face::NumLight => v.push(&f.num_light),
-            Face::Num => v.push(&f.num),
-            Face::NumSemi => v.push(&f.num_semi),
-            Face::Ko | Face::KoBold => {}
-        }
-        v.extend(system);
-        v.push(noto);
-        if matches!(self.face, Face::Ko | Face::KoBold) {
-            v.push(if bold { &f.num_semi } else { &f.num }); // Latin Extended (Polish, Turkish)
-        }
-        v.extend(f.segoe.as_ref());
-        v
-    }
+        let build = |face: Face| {
+            let bold = matches!(face, Face::KoBold | Face::NumSemi);
+            let mut v: Vec<&'static FontRef<'static>> = Vec::with_capacity(4);
+            match face {
+                Face::NumLight => v.push(&f.num_light),
+                Face::Num => v.push(&f.num),
+                Face::NumSemi => v.push(&f.num_semi),
+                Face::Ko | Face::KoBold => {}
+            }
+            v.extend(f.system.as_ref().map(|s| if bold { &s.1 } else { &s.0 }));
+            v.push(if bold { &f.noto_bold } else { &f.noto });
+            if matches!(face, Face::Ko | Face::KoBold) {
+                v.push(if bold { &f.num_semi } else { &f.num }); // Latin Extended (Polish, Turkish)
+            }
+            v.extend(f.segoe.as_ref());
+            v
+        };
+        [Face::NumLight, Face::Num, Face::NumSemi, Face::Ko, Face::KoBold].map(build)
+    })
+}
 
+impl Font_ {
     fn scale(&self, f: &'static FontRef<'static>) -> Scaled {
         let em = f.units_per_em().unwrap_or(1000.0);
         f.as_scaled(PxScale::from(self.size * f.height_unscaled() / em))
@@ -109,18 +114,23 @@ impl Font_ {
 
     /// The primary font at this size (line metrics come from it).
     pub(super) fn scaled(&self) -> Scaled {
-        self.scale(self.chain()[0])
+        self.scale(chains()[self.face as usize][0])
     }
 
-    /// Each character with the font that has it.
-    pub(super) fn runs(&self, s: &str) -> Vec<(char, Scaled)> {
-        let chain: Vec<Scaled> = self.chain().into_iter().map(|f| self.scale(f)).collect();
-        s.chars()
-            .map(|ch| {
-                let sf = chain.iter().find(|sf| sf.glyph_id(ch).0 != 0).unwrap_or(&chain[0]);
-                (ch, *sf)
-            })
-            .collect()
+    /// Call `f` with each character and the font that has it (no allocation).
+    pub(super) fn each(&self, s: &str, mut f: impl FnMut(char, Scaled)) {
+        let chain = &chains()[self.face as usize];
+        let mut scaled: [Option<Scaled>; 6] = [None; 6];
+        for ch in s.chars() {
+            let mut pick = None;
+            for (i, font) in chain.iter().enumerate().take(scaled.len()) {
+                if font.glyph_id(ch).0 != 0 {
+                    pick = Some(*scaled[i].get_or_insert_with(|| self.scale(font)));
+                    break;
+                }
+            }
+            f(ch, pick.unwrap_or_else(|| *scaled[0].get_or_insert_with(|| self.scale(chain[0]))));
+        }
     }
 }
 
@@ -245,9 +255,8 @@ impl Canvas {
     }
 
     pub(super) fn text_len(&self, s: &str, f: Font_) -> f32 {
-        let mut w = 0.0;
-        let mut prev: Option<(ab_glyph::GlyphId, *const FontRef)> = None;
-        for (ch, sf) in f.runs(s) {
+        let (mut w, mut prev) = (0.0, None::<(ab_glyph::GlyphId, *const FontRef)>);
+        f.each(s, |ch, sf| {
             let id = sf.glyph_id(ch);
             if let Some((p, font)) = prev {
                 if std::ptr::eq(font, sf.font) {
@@ -256,26 +265,27 @@ impl Canvas {
             }
             w += sf.h_advance(id);
             prev = Some((id, sf.font as *const _));
-        }
+        });
         w
     }
 
     /// Ink top of `s` relative to its baseline (negative = above).
     pub(super) fn ink_top(&self, s: &str, f: Font_) -> f32 {
-        f.runs(s)
-            .into_iter()
-            .filter_map(|(ch, sf)| sf.outline_glyph(sf.glyph_id(ch).with_scale_and_position(sf.scale, point(0.0, 0.0))))
-            .map(|g| g.px_bounds().min.y)
-            .fold(0.0, f32::min)
+        let mut top = 0.0f32;
+        f.each(s, |ch, sf| {
+            if let Some(g) = sf.outline_glyph(sf.glyph_id(ch).with_scale_and_position(sf.scale, point(0.0, 0.0))) {
+                top = top.min(g.px_bounds().min.y);
+            }
+        });
+        top
     }
 
     pub(super) fn text_at(&mut self, x: f32, y: f32, s: &str, f: Font_, c: Rgb, anchor: Anchor) {
         let sf0 = f.scaled();
         let (asc, desc) = (sf0.ascent(), sf0.descent());
-        let width = self.text_len(s, f);
         let x0 = match anchor {
-            Anchor::Mt | Anchor::Mm => x - width / 2.0,
-            _ => x,
+            Anchor::Mt | Anchor::Mm => x - self.text_len(s, f) / 2.0,
+            _ => x, // left-aligned: no need to measure
         };
         let baseline = match anchor {
             Anchor::La => y + asc,
@@ -283,12 +293,17 @@ impl Canvas {
             Anchor::Mt => y - self.ink_top(s, f),
             Anchor::Mm => y + (asc + desc) / 2.0,
         };
-        let mut pen = x0;
-        let mut prev: Option<(ab_glyph::GlyphId, *const FontRef)> = None;
-        for (ch, sf) in f.runs(s) {
+        self.glyphs(x0, baseline, s, f, c, 0.0);
+    }
+
+    /// Draw `s` from `x` on `baseline`, adding `spacing` between characters; returns the width.
+    fn glyphs(&mut self, x: f32, baseline: f32, s: &str, f: Font_, c: Rgb, spacing: f32) -> f32 {
+        let (mut pen, mut prev) = (x, None::<(ab_glyph::GlyphId, *const FontRef)>);
+        f.each(s, |ch, sf| {
             let id = sf.glyph_id(ch);
             if let Some((p, font)) = prev {
-                if std::ptr::eq(font, sf.font) {
+                pen += spacing;
+                if spacing == 0.0 && std::ptr::eq(font, sf.font) {
                     pen += sf.kern(p, id);
                 }
             }
@@ -298,7 +313,8 @@ impl Canvas {
             }
             pen += sf.h_advance(id);
             prev = Some((id, sf.font as *const _));
-        }
+        });
+        pen - x
     }
 
     pub(super) fn text(&mut self, x: f32, y: f32, s: &str, f: Font_, c: Rgb) {
@@ -309,53 +325,101 @@ impl Canvas {
     pub(super) fn caps(&mut self, x: f32, y: f32, text: &str, size: f32, fill: Option<Rgb>, spacing: f32, right: bool) -> f32 {
         let f = num(size, Face::NumSemi);
         let text = text.to_uppercase();
-        let width: f32 = text.chars().map(|ch| self.text_len(&ch.to_string(), f)).sum::<f32>()
-            + spacing * (text.chars().count().saturating_sub(1)) as f32;
-        let mut x = if right { x - width } else { x };
-        for ch in text.chars() {
-            let s = ch.to_string();
-            self.text(x, y, &s, f, fill.unwrap_or(LABEL));
-            x += self.text_len(&s, f) + spacing;
-        }
+        // letter-spaced: each character on its own advance, no kerning
+        let mut width = 0.0;
+        let mut n = 0usize;
+        f.each(&text, |ch, sf| {
+            width += sf.h_advance(sf.glyph_id(ch));
+            n += 1;
+        });
+        width += spacing * n.saturating_sub(1) as f32;
+        let x0 = if right { x - width } else { x };
+        self.glyphs(x0, y + f.scaled().ascent(), &text, f, fill.unwrap_or(LABEL), spacing);
         width
     }
 
     /// Soft colored bloom around bright strokes inside the box (clock digits, graph lines).
+    /// Soft colored bloom around bright strokes inside the box (clock digits, graph lines).
+    ///
+    /// The bright-pixel mask is blurred at half resolution (the glow is wide and soft, so this
+    /// looks the same at a quarter of the work) and the blurred mask is reused while the mask
+    /// stays the same (the clock changes once a minute).
     pub(super) fn glow(&mut self, x0: u32, y0: u32, x1: u32, y1: u32) {
         let (color, strength) = GLOW;
         let (w, h) = ((x1 - x0) as usize, (y1 - y0) as usize);
-        let mut mask: Vec<f32> = (0..w * h)
-            .map(|i| {
-                let c = self.get((x0 as usize + i % w) as f32, (y0 as usize + i / w) as f32);
-                let l = 0.299 * c[0] as f32 + 0.587 * c[1] as f32 + 0.114 * c[2] as f32; // PIL "L"
-                if l > 150.0 { 255.0 } else { 0.0 }
-            })
-            .collect();
-        gaussian_blur(&mut mask, w, h, 10.0);
-        for i in 0..w * h {
-            let m = mask[i] * strength / 255.0;
-            if m <= 0.002 {
-                continue;
+        let (hw, hh) = (w.div_ceil(2), h.div_ceil(2));
+        let stride = W as usize * 4;
+        // half-resolution mask: share of bright (PIL "L" > 150) pixels in each 2x2 block
+        let mut mask = vec![0f32; hw * hh];
+        {
+            let px = self.pm.data();
+            for y in 0..h {
+                let row = &px[(y0 as usize + y) * stride + x0 as usize * 4..][..w * 4];
+                let mrow = &mut mask[(y / 2) * hw..][..hw];
+                for (x, c) in row.chunks_exact(4).enumerate() {
+                    let l = 0.299 * c[0] as f32 + 0.587 * c[1] as f32 + 0.114 * c[2] as f32;
+                    if l > 150.0 {
+                        mrow[x / 2] += 255.0 / 4.0;
+                    }
+                }
             }
-            let (x, y) = (x0 as f32 + (i % w) as f32, y0 as f32 + (i / w) as f32);
-            let old = self.get(x, y);
-            // screen(old, color * m)
-            let n = [0, 1, 2].map(|k| {
-                let b = color[k] as f32 * m;
-                255.0 - (255.0 - old[k] as f32) * (255.0 - b) / 255.0
-            });
-            let px = &mut self.pm.pixels_mut()[(y as u32 * W + x as u32) as usize];
-            *px = tiny_skia::PremultipliedColorU8::from_rgba(n[0] as u8, n[1] as u8, n[2] as u8, 255).unwrap();
+        }
+        let key = mask.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &v| (h ^ v.to_bits() as u64).wrapping_mul(0x100_0000_01b3));
+        static CACHE: std::sync::Mutex<Vec<((u32, u32), u64, Vec<f32>)>> = std::sync::Mutex::new(Vec::new());
+        let mut cache = CACHE.lock().unwrap();
+        let slot = match cache.iter().position(|(at, _, _)| *at == (x0, y0)) {
+            Some(i) => i,
+            None => {
+                cache.push(((x0, y0), !key, Vec::new()));
+                cache.len() - 1
+            }
+        };
+        if cache[slot].1 != key {
+            gaussian_blur(&mut mask, hw, hh, 5.0);
+            cache[slot] = ((x0, y0), key, mask);
+        }
+        let blurred = &cache[slot].2;
+        // screen(old, color * m), sampling the half-resolution mask bilinearly
+        let px = self.pm.data_mut();
+        for y in 0..h {
+            let fy = ((y as f32 - 0.5) / 2.0).clamp(0.0, (hh - 1) as f32);
+            let (my0, ty) = (fy as usize, fy.fract());
+            let my1 = (my0 + 1).min(hh - 1);
+            let row = &mut px[(y0 as usize + y) * stride + x0 as usize * 4..][..w * 4];
+            for (x, p) in row.chunks_exact_mut(4).enumerate() {
+                let fx = ((x as f32 - 0.5) / 2.0).clamp(0.0, (hw - 1) as f32);
+                let (mx0, tx) = (fx as usize, fx.fract());
+                let mx1 = (mx0 + 1).min(hw - 1);
+                let top = blurred[my0 * hw + mx0] * (1.0 - tx) + blurred[my0 * hw + mx1] * tx;
+                let bot = blurred[my1 * hw + mx0] * (1.0 - tx) + blurred[my1 * hw + mx1] * tx;
+                let m = (top * (1.0 - ty) + bot * ty) * strength / 255.0;
+                if m <= 0.002 {
+                    continue;
+                }
+                for k in 0..3 {
+                    let b = color[k] as f32 * m;
+                    p[k] = (255.0 - (255.0 - p[k] as f32) * (255.0 - b) / 255.0) as u8;
+                }
+            }
         }
     }
 
-    /// Copy landscape columns `cols` (all rows) from `src`.
-    pub fn restore_columns(&mut self, src: &Canvas, cols: std::ops::Range<usize>) {
+    /// Keep a copy of landscape columns `cols` (all rows) in `out`.
+    pub fn save_columns(&self, cols: std::ops::Range<usize>, out: &mut Vec<u8>) {
         let w = W as usize * 4;
         let (a, b) = (cols.start.min(W as usize) * 4, cols.end.min(W as usize) * 4);
-        let (dst, src) = (self.pm.data_mut(), src.pm.data());
-        for row in 0..H as usize {
-            dst[row * w + a..row * w + b].copy_from_slice(&src[row * w + a..row * w + b]);
+        out.clear();
+        for row in self.pm.data().chunks_exact(w) {
+            out.extend_from_slice(&row[a..b]);
+        }
+    }
+
+    /// Put back columns saved with `save_columns`.
+    pub fn load_columns(&mut self, cols: std::ops::Range<usize>, saved: &[u8]) {
+        let w = W as usize * 4;
+        let (a, b) = (cols.start.min(W as usize) * 4, cols.end.min(W as usize) * 4);
+        for (row, src) in self.pm.data_mut().chunks_exact_mut(w).zip(saved.chunks_exact(b - a)) {
+            row[a..b].copy_from_slice(src);
         }
     }
 

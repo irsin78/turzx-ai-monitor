@@ -56,8 +56,9 @@ pub fn run(ai_enabled: bool) -> ! {
     let mut mascots = crate::mascot::Mascots::new(&areas);
     let mut enc = jpeg::RowJpeg::new();
     let mut black: Option<Vec<u8>> = None;
-    let mut base: Option<(i64, ui::Canvas)> = None;
+    let mut drawn_at: Option<i64> = None; // second of the last full redraw
     let mut work: Option<ui::Canvas> = None;
+    let mut band_backup: Vec<u8> = Vec::new(); // the mascot band as redrawn, without mascots
     let mut last_tick = Instant::now();
     loop {
         let t = Instant::now();
@@ -107,7 +108,7 @@ pub fn run(ai_enabled: bool) -> ! {
                 let dt = last_tick.elapsed().as_secs_f32();
                 last_tick = t;
                 let sent = if was_locked {
-                    base = None;
+                    drawn_at = None;
                     let frame = black.get_or_insert_with(|| {
                         let mut e = jpeg::RowJpeg::new();
                         e.encode(&tiny_skia::Pixmap::new(ui::W, ui::H).unwrap(), 0..jpeg::BANDS);
@@ -116,16 +117,16 @@ pub fn run(ai_enabled: bool) -> ! {
                     p.send_jpeg(frame)
                 } else {
                     let now = chrono::Local::now();
-                    let fresh = base.as_ref().is_none_or(|(sec, _)| *sec != now.timestamp());
+                    let fresh = drawn_at != Some(now.timestamp());
                     if fresh {
-                        let g = st.lock().unwrap();
-                        let cv = ui::render(&g, now);
-                        work = Some(cv.clone());
-                        base = Some((now.timestamp(), cv));
+                        let snapshot = st.lock().unwrap().clone(); // render without holding the lock
+                        let cv = work.insert(ui::render(&snapshot, now));
+                        cv.save_columns(band_cols.clone(), &mut band_backup);
+                        drawn_at = Some(now.timestamp());
                     }
-                    let (cv, (_, b)) = (work.as_mut().unwrap(), base.as_ref().unwrap());
+                    let cv = work.as_mut().unwrap();
                     if !fresh {
-                        cv.restore_columns(b, band_cols.clone()); // erase last frame's mascots
+                        cv.load_columns(band_cols.clone(), &band_backup); // erase last frame's mascots
                     }
                     mascots.update(dt, &areas);
                     mascots.draw(cv.pixmap_mut(), &areas);

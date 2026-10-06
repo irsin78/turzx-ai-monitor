@@ -37,7 +37,6 @@ use chrono::{DateTime, Datelike, Local, Timelike};
 use tiny_skia::{FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Rect, Stroke, Transform};
 
 use crate::sources::ai::now as epoch_now;
-use crate::sources::holidays::is_holiday;
 use crate::state::{AiErr, State, AI_NAMES};
 use crate::config;
 use crate::i18n::{self, fill, TextFont};
