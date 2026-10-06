@@ -38,6 +38,11 @@ pub fn supervise() -> ! {
                 thread::sleep(Duration::from_secs(60));
             }
         }
+        if status.as_ref().is_ok_and(|s| s.code() == Some(0)) {
+            // the worker restarts itself on purpose (settings changed)
+            thread::sleep(Duration::from_millis(300));
+            continue;
+        }
         let how = match &status {
             Ok(s) => match s.code() {
                 Some(c) => format!("exit code {c} (0x{:08X})", c as u32),

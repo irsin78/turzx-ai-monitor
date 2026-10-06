@@ -39,7 +39,9 @@ use tiny_skia::{FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Rect, S
 use crate::sources::ai::now as epoch_now;
 use crate::sources::holidays::is_holiday;
 use crate::state::{AiErr, State, AI_NAMES};
-use crate::sources::weather::{air_grade, Weather};
+use crate::config;
+use crate::i18n::{self, fill, TextFont};
+use crate::sources::weather::{self as wx, Air, Weather};
 
 pub const W: u32 = 1920;
 pub const H: u32 = 480;
@@ -85,7 +87,6 @@ const GRAPH_H: f32 = 56.0;
 const GRAPH_STEP: f32 = 2.0;
 pub const HIST_LEN: usize = (GRAPH_W / GRAPH_STEP) as usize + 1;
 
-const WEEKDAYS: [&str; 7] = ["월", "화", "수", "목", "금", "토", "일"];
 
 fn mix(c: Rgb, bg: Rgb, a: f32) -> Rgb {
     [0, 1, 2].map(|i| (c[i] as f32 * a + bg[i] as f32 * (1.0 - a)) as u8)

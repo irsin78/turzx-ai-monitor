@@ -34,7 +34,11 @@ pub(super) fn draw_ai(cv: &mut Canvas, st: &State, x: f32, top: f32) {
     cv.caps(x, top, "AI Left", 16.0, None, 2.5, false);
     cv.caps(c1, top, "5 Hours", 14.0, Some(MUTED), 2.0, false);
     cv.caps(c2, top, "Weekly", 14.0, Some(MUTED), 2.0, false);
+    let ai = &config::get().ai;
     for (i, name) in AI_NAMES.iter().enumerate() {
+        if ![ai.claude, ai.codex, ai.antigravity][i] {
+            continue; // turned off in the settings
+        }
         let y = top + 34.0 + i as f32 * AI_ROW;
         let color = ai_color(name);
         cv.rect(x, y + 10.0, x + 4.0, y + 30.0, color); // brand tick
@@ -68,7 +72,7 @@ pub(super) fn draw_ai(cv: &mut Canvas, st: &State, x: f32, top: f32) {
             cv.text(cx, y, &val, f_val, if left <= 10.0 { HOT } else { INK });
             cv.text(cx + cv.text_len(&val, f_val) + 4.0, y + 12.0, "%", num(16.0, Face::NumSemi), MUTED);
             segmented_bar(cv, cx, y + 40.0, bw, 12.0, left, color);
-            let when = if refilled { "초기화됨 · 확인 중".to_string() } else { fmt_left(reset) };
+            let when = if refilled { i18n::get().refilled.to_string() } else { fmt_left(reset) };
             cv.text(cx, y + 58.0, &when, ko(16.0, false), SOFT);
         }
     }

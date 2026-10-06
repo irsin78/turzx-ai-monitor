@@ -6,9 +6,11 @@ pub(super) const CLOCK_BASELINE: f32 = 172.0;
 pub(super) const DATE_Y: f32 = 206.0;
 
 pub(super) fn draw_clock(cv: &mut Canvas, now: &DateTime<Local>, x: f32, right: f32) {
-    let h12 = if now.hour() % 12 == 0 { 12 } else { now.hour() % 12 };
-    let hm = format!("{}:{:02}", h12, now.minute());
-    let ampm = if now.hour() < 12 { "AM" } else { "PM" };
+    let t = i18n::get();
+    let h24 = config::get().hour24();
+    let h = if h24 { now.hour() } else if now.hour() % 12 == 0 { 12 } else { now.hour() % 12 };
+    let hm = format!("{}:{:02}", h, now.minute());
+    let ampm = if h24 { "" } else if now.hour() < 12 { "AM" } else { "PM" };
     let sec_font = num(34.0, Face::NumLight);
     let mut f = num(170.0, Face::NumLight);
     for size in (120..=170).rev().step_by(5) {
@@ -23,15 +25,26 @@ pub(super) fn draw_clock(cv: &mut Canvas, now: &DateTime<Local>, x: f32, right: 
     let sx = x + cv.text_len(&hm, f) + 16.0;
     cv.caps(sx, digits_top + 4.0, ampm, 20.0, Some(ACCENT), 2.5, false);
     cv.text(sx, digits_top + 30.0, &format!("{:02}", now.second()), sec_font, mix(ACCENT, BG, 0.7));
-    let date = format!("{}. {:02}. {:02}   {}요일", now.year(), now.month(), now.day(), WEEKDAYS[now.weekday().num_days_from_monday() as usize]);
-    cv.text(x, DATE_Y, &date, ko(24.0, false), MUTED);
+    let date = now.format_localized(t.date, t.locale).to_string();
+    let f = fit_ko(cv, &date, &[24.0, 22.0, 20.0, 18.0], false, right - x + 30.0);
+    cv.text(x, DATE_Y, &date, f, MUTED);
 }
 
 pub(super) fn draw_calendar(cv: &mut Canvas, now: &DateTime<Local>, x: f32, y: f32, w: f32) {
+    let t = i18n::get();
     let cw = w / 7.0;
-    cv.caps(x + 4.0, y, &now.format("%B").to_string(), 16.0, Some(MUTED), 2.5, false);
+    let month = match (t.month_names, t.month_en) {
+        (Some(names), _) => names[now.month0() as usize].to_string(),
+        (None, true) => now.format(t.month).to_string(),
+        (None, false) => now.format_localized(t.month, t.locale).to_string(),
+    };
+    if t.month_caps {
+        cv.caps(x + 4.0, y, &month, 16.0, Some(MUTED), 2.5, false);
+    } else {
+        cv.text(x + 4.0, y - 3.0, &month, ko(17.0, false), MUTED);
+    }
     let (f_head, f_day) = (ko(15.0, false), num(21.0, Face::Num));
-    for (i, name) in ["일", "월", "화", "수", "목", "금", "토"].iter().enumerate() {
+    for (i, name) in t.weekdays.iter().enumerate() {
         let c = if i == 0 { SUNDAY } else if i == 6 { SATURDAY } else { MUTED };
         cv.text_at(x + cw * i as f32 + cw / 2.0, y + 32.0, name, f_head, c, Anchor::Mt);
     }

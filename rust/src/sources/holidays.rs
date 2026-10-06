@@ -1,6 +1,17 @@
-//! Korean public holidays incl. substitute holidays, 2026-2040.
-//! Generated from the Python `holidays` package (v0.105); regenerate when temporary
-//! holidays (e.g. election days) are announced.
+//! Public holidays of the country in the settings, shown in red on the calendar.
+//!
+//! Korea uses the table below (incl. substitute holidays, 2026-2040; generated from the Python
+//! `holidays` package v0.105; regenerate when temporary holidays such as election days are
+//! announced). Other countries come from the Nager.Date API (date.nager.at, nationwide
+//! holidays only), cached per country and year under %LOCALAPPDATA%\TurzxDashboard\holidays.
+//! Rendering never waits for the network: a year is fetched in the background on first use.
+
+use std::collections::{HashMap, HashSet};
+use std::sync::{Mutex, OnceLock};
+
+use serde_json::Value;
+
+use crate::config;
 
 pub const HOLIDAYS: &[(u16, u8, u8)] = &[
     (2026, 1, 1), (2026, 2, 16), (2026, 2, 17), (2026, 2, 18), (2026, 3, 1), (2026, 3, 2), (2026, 5, 1), (2026, 5, 5),
@@ -46,6 +57,73 @@ pub const HOLIDAYS: &[(u16, u8, u8)] = &[
     (2040, 10, 3), (2040, 10, 9), (2040, 12, 25),
 ];
 
-pub fn is_holiday(y: i32, m: u32, d: u32) -> bool {
+fn korea(y: i32, m: u32, d: u32) -> bool {
     HOLIDAYS.binary_search(&(y as u16, m as u8, d as u8)).is_ok()
+}
+
+/// Holiday dates by (country, year); None while the year is being fetched or after a failure.
+type Years = HashMap<(String, i32), Option<HashSet<(u32, u32)>>>;
+
+fn years() -> &'static Mutex<Years> {
+    static Y: OnceLock<Mutex<Years>> = OnceLock::new();
+    Y.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn cache_file(country: &str, year: i32) -> std::path::PathBuf {
+    std::path::PathBuf::from(std::env::var("LOCALAPPDATA").unwrap_or_default())
+        .join(r"TurzxDashboard\holidays")
+        .join(format!("{country}-{year}.json"))
+}
+
+fn parse(json: &str) -> Option<HashSet<(u32, u32)>> {
+    let v: Value = serde_json::from_str(json).ok()?;
+    Some(
+        v.as_array()?
+            .iter()
+            .filter(|h| h["global"].as_bool().unwrap_or(true))
+            .filter_map(|h| {
+                let d = h["date"].as_str()?; // "2026-01-19"
+                Some((d.get(5..7)?.parse().ok()?, d.get(8..10)?.parse().ok()?))
+            })
+            .collect(),
+    )
+}
+
+/// Load one year from the cache file, or download it (on a background thread).
+fn fetch(country: String, year: i32) {
+    std::thread::spawn(move || {
+        let file = cache_file(&country, year);
+        let days = std::fs::read_to_string(&file).ok().and_then(|t| parse(&t)).or_else(|| {
+            let url = format!("https://date.nager.at/api/v3/PublicHolidays/{year}/{country}");
+            let text = ureq::get(&url).call().ok()?.body_mut().read_to_string().ok()?;
+            let days = parse(&text)?;
+            let _ = std::fs::create_dir_all(file.parent()?);
+            let _ = std::fs::write(&file, &text);
+            log::info!("holidays {country} {year}: {} days", days.len());
+            Some(days)
+        });
+        if days.is_none() {
+            log::warn!("holidays {country} {year}: not available");
+        }
+        years().lock().unwrap().insert((country, year), days);
+    });
+}
+
+pub fn is_holiday(y: i32, m: u32, d: u32) -> bool {
+    static COUNTRY: OnceLock<Option<String>> = OnceLock::new();
+    let Some(country) = COUNTRY.get_or_init(|| config::get().holiday_country()) else { return false };
+    if country == "KR" {
+        return korea(y, m, d);
+    }
+    let mut map = years().lock().unwrap();
+    match map.get(&(country.clone(), y)) {
+        Some(Some(days)) => days.contains(&(m, d)),
+        Some(None) => false, // being fetched, or unavailable
+        None => {
+            map.insert((country.clone(), y), None);
+            drop(map);
+            fetch(country.clone(), y);
+            false
+        }
+    }
 }

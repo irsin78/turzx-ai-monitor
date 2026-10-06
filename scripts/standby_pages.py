@@ -1,6 +1,7 @@
 """Build the three 1920x480 standby screens (assets/standby/page_N.png) from the
 Codex-generated art (art_N.png). The dashboard embeds the pages and shows one at random
-when Windows shuts down, restarts or logs off."""
+when Windows shuts down, restarts or logs off. The subtitle next to the accent bar is drawn
+by the dashboard in the screen language."""
 import os
 import random
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
@@ -56,7 +57,7 @@ def compose(art_path, accent, sub, out):
         d.text((x, 118), ch, font=f_big, fill=(232, 238, 252))
         x += d.textlength(ch, font=f_big) + 6
     d.rounded_rectangle((tx + 6, 318, tx + 70, 322), radius=2, fill=accent)
-    d.text((tx + 92, 300), sub, font=f_sub, fill=(138, 151, 184))
+    # the subtitle is drawn by the dashboard in the screen language (ui/standby.rs)
     page.save(out)
 
 

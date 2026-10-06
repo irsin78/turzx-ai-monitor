@@ -148,7 +148,7 @@ pub(super) fn draw_hardware(cv: &mut Canvas, st: &State, x: f32, right: f32) {
         let tf = num(36.0, Face::NumLight);
         match temp {
             None => cv.text(tx, y + 24.0, "--°", tf, FAINT),
-            Some(t) => cv.text(tx, y + 24.0, &format!("{t:.0}°"), tf, temp_color(t)),
+            Some(t) => cv.text(tx, y + 24.0, &format!("{:.0}°", deg(t)), tf, temp_color(t)),
         }
         if i == 0 {
             cv.caps(tx, y, "Temp", 14.0, Some(MUTED), 2.0, false);
@@ -178,7 +178,10 @@ pub(super) fn draw_fans(cv: &mut Canvas, st: &State, x: f32, right: f32) {
     cv.caps(x, TOP, "Fans", 16.0, None, 2.5, false);
     cv.caps(right, TOP, "RPM", 14.0, Some(MUTED), 2.0, true);
     let hw = &st.hw;
-    let fans = [("라디에이터", "fan_radiator", hw.fan_radiator), ("펌프", "fan_pump", hw.fan_pump), ("VGA", "fan_gpu", hw.fan_gpu)];
+    // names from the settings, or the language's defaults
+    let custom = &config::get().fans.labels;
+    let name = |i: usize| custom.get(i).map_or(i18n::get().fans[i], String::as_str);
+    let fans = [(name(0), "fan_radiator", hw.fan_radiator), (name(1), "fan_pump", hw.fan_pump), (name(2), "fan_gpu", hw.fan_gpu)];
     for (j, (label, key, rpm)) in fans.into_iter().enumerate() {
         let fx = x + [0.0, AI_C1, AI_C2][j];
         bg_graph(cv, fx, TOP + 24.0, 170.0, 64.0, &st.hist[key], 500.0, None);

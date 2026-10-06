@@ -15,8 +15,12 @@ pub(super) struct Fonts {
     num_light: FontRef<'static>,
     num: FontRef<'static>,
     num_semi: FontRef<'static>,
-    ko: FontRef<'static>,
-    ko_bold: FontRef<'static>,
+    noto: FontRef<'static>,
+    noto_bold: FontRef<'static>,
+    /// the language's preferred Windows font (Japanese / Chinese glyph forms), regular and bold
+    system: Option<(FontRef<'static>, FontRef<'static>)>,
+    /// last resort for anything the others lack
+    segoe: Option<FontRef<'static>>,
 }
 
 pub(super) static HARMONY_THIN: &[u8] = include_bytes!("../../../fonts/HarmonyOS_Sans_Thin.ttf");
@@ -24,6 +28,13 @@ pub(super) static HARMONY_LIGHT: &[u8] = include_bytes!("../../../fonts/HarmonyO
 pub(super) static HARMONY_MEDIUM: &[u8] = include_bytes!("../../../fonts/HarmonyOS_Sans_Medium.ttf");
 pub(super) static NOTO_KR: &[u8] = include_bytes!("../../../fonts/NotoSansKR-VF.ttf");
 pub(super) const NUM_SCALE: f32 = 0.92; // sizes are tuned for Bahnschrift; evens out HarmonyOS metrics
+
+/// A font from C:\Windows\Fonts (first face of a .ttc), kept for the life of the process.
+fn windows_font(file: &str) -> Option<FontRef<'static>> {
+    let dir = std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into());
+    let data: &'static [u8] = Box::leak(std::fs::read(format!(r"{dir}\Fonts\{file}")).ok()?.into_boxed_slice());
+    FontRef::try_from_slice_and_index(data, 0).ok()
+}
 
 pub(super) fn fonts() -> &'static Fonts {
     static F: OnceLock<Fonts> = OnceLock::new();
@@ -33,12 +44,20 @@ pub(super) fn fonts() -> &'static Fonts {
             f.set_variation(b"wght", wght);
             f
         };
+        let system = match crate::i18n::get().font {
+            TextFont::Noto => None,
+            TextFont::YuGothic => windows_font("YuGothR.ttc").zip(windows_font("YuGothM.ttc")),
+            TextFont::YaHei => windows_font("msyh.ttc").zip(windows_font("msyhbd.ttc")),
+            TextFont::JhengHei => windows_font("msjh.ttc").zip(windows_font("msjhbd.ttc")),
+        };
         Fonts {
             num_light: FontRef::try_from_slice(HARMONY_THIN).expect("HarmonyOS Thin"),
             num: FontRef::try_from_slice(HARMONY_LIGHT).expect("HarmonyOS Light"),
             num_semi: FontRef::try_from_slice(HARMONY_MEDIUM).expect("HarmonyOS Medium"),
-            ko: noto(300.0),      // Light
-            ko_bold: noto(500.0), // Medium
+            noto: noto(300.0),      // Light
+            noto_bold: noto(500.0), // Medium
+            system,
+            segoe: windows_font("segoeui.ttf"),
         }
     })
 }
@@ -54,26 +73,54 @@ pub(super) fn num(size: f32, face: Face) -> Font_ {
     Font_ { face, size: (size * NUM_SCALE).round() }
 }
 
+/// Text in the screen language (`ko` for historical reasons: it was Hangul only).
 pub(super) fn ko(size: f32, bold: bool) -> Font_ {
     Font_ { face: if bold { Face::KoBold } else { Face::Ko }, size }
 }
 
+type Scaled = ab_glyph::PxScaleFont<&'static FontRef<'static>>;
+
 impl Font_ {
-    pub(super) fn font(&self) -> &'static FontRef<'static> {
+    /// Fonts to try for each character, preferred first.
+    fn chain(&self) -> Vec<&'static FontRef<'static>> {
         let f = fonts();
+        let bold = matches!(self.face, Face::KoBold | Face::NumSemi);
+        let (system, noto) = (f.system.as_ref().map(|s| if bold { &s.1 } else { &s.0 }), if bold { &f.noto_bold } else { &f.noto });
+        let mut v = Vec::with_capacity(4);
         match self.face {
-            Face::NumLight => &f.num_light,
-            Face::Num => &f.num,
-            Face::NumSemi => &f.num_semi,
-            Face::Ko => &f.ko,
-            Face::KoBold => &f.ko_bold,
+            Face::NumLight => v.push(&f.num_light),
+            Face::Num => v.push(&f.num),
+            Face::NumSemi => v.push(&f.num_semi),
+            Face::Ko | Face::KoBold => {}
         }
+        v.extend(system);
+        v.push(noto);
+        if matches!(self.face, Face::Ko | Face::KoBold) {
+            v.push(if bold { &f.num_semi } else { &f.num }); // Latin Extended (Polish, Turkish)
+        }
+        v.extend(f.segoe.as_ref());
+        v
     }
 
-    pub(super) fn scaled(&self) -> ab_glyph::PxScaleFont<&'static FontRef<'static>> {
-        let f = self.font();
+    fn scale(&self, f: &'static FontRef<'static>) -> Scaled {
         let em = f.units_per_em().unwrap_or(1000.0);
         f.as_scaled(PxScale::from(self.size * f.height_unscaled() / em))
+    }
+
+    /// The primary font at this size (line metrics come from it).
+    pub(super) fn scaled(&self) -> Scaled {
+        self.scale(self.chain()[0])
+    }
+
+    /// Each character with the font that has it.
+    pub(super) fn runs(&self, s: &str) -> Vec<(char, Scaled)> {
+        let chain: Vec<Scaled> = self.chain().into_iter().map(|f| self.scale(f)).collect();
+        s.chars()
+            .map(|ch| {
+                let sf = chain.iter().find(|sf| sf.glyph_id(ch).0 != 0).unwrap_or(&chain[0]);
+                (ch, *sf)
+            })
+            .collect()
     }
 }
 
@@ -198,32 +245,33 @@ impl Canvas {
     }
 
     pub(super) fn text_len(&self, s: &str, f: Font_) -> f32 {
-        let sf = f.scaled();
         let mut w = 0.0;
-        let mut prev = None;
-        for ch in s.chars() {
+        let mut prev: Option<(ab_glyph::GlyphId, *const FontRef)> = None;
+        for (ch, sf) in f.runs(s) {
             let id = sf.glyph_id(ch);
-            if let Some(p) = prev {
-                w += sf.kern(p, id);
+            if let Some((p, font)) = prev {
+                if std::ptr::eq(font, sf.font) {
+                    w += sf.kern(p, id);
+                }
             }
             w += sf.h_advance(id);
-            prev = Some(id);
+            prev = Some((id, sf.font as *const _));
         }
         w
     }
 
     /// Ink top of `s` relative to its baseline (negative = above).
     pub(super) fn ink_top(&self, s: &str, f: Font_) -> f32 {
-        let sf = f.scaled();
-        s.chars()
-            .filter_map(|ch| sf.outline_glyph(sf.glyph_id(ch).with_scale_and_position(sf.scale, point(0.0, 0.0))))
+        f.runs(s)
+            .into_iter()
+            .filter_map(|(ch, sf)| sf.outline_glyph(sf.glyph_id(ch).with_scale_and_position(sf.scale, point(0.0, 0.0))))
             .map(|g| g.px_bounds().min.y)
             .fold(0.0, f32::min)
     }
 
     pub(super) fn text_at(&mut self, x: f32, y: f32, s: &str, f: Font_, c: Rgb, anchor: Anchor) {
-        let sf = f.scaled();
-        let (asc, desc) = (sf.ascent(), sf.descent());
+        let sf0 = f.scaled();
+        let (asc, desc) = (sf0.ascent(), sf0.descent());
         let width = self.text_len(s, f);
         let x0 = match anchor {
             Anchor::Mt | Anchor::Mm => x - width / 2.0,
@@ -236,18 +284,20 @@ impl Canvas {
             Anchor::Mm => y + (asc + desc) / 2.0,
         };
         let mut pen = x0;
-        let mut prev = None;
-        for ch in s.chars() {
+        let mut prev: Option<(ab_glyph::GlyphId, *const FontRef)> = None;
+        for (ch, sf) in f.runs(s) {
             let id = sf.glyph_id(ch);
-            if let Some(p) = prev {
-                pen += sf.kern(p, id);
+            if let Some((p, font)) = prev {
+                if std::ptr::eq(font, sf.font) {
+                    pen += sf.kern(p, id);
+                }
             }
             if let Some(og) = sf.outline_glyph(id.with_scale_and_position(sf.scale, point(pen, baseline))) {
                 let b = og.px_bounds();
                 og.draw(|gx, gy, cov| self.blend(b.min.x as i32 + gx as i32, b.min.y as i32 + gy as i32, c, cov));
             }
             pen += sf.h_advance(id);
-            prev = Some(id);
+            prev = Some((id, sf.font as *const _));
         }
     }
 

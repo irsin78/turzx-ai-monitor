@@ -16,11 +16,14 @@ pub fn standby() -> Canvas {
 }
 
 pub fn standby_page(i: usize) -> Canvas {
-    match Pixmap::decode_png(STANDBY[i]) {
+    let mut cv = match Pixmap::decode_png(STANDBY[i]) {
         Ok(pm) => Canvas { pm },
         Err(e) => {
             log::warn!("standby page {i}: {e}");
             Canvas::background()
         }
-    }
+    };
+    // subtitle next to the accent bar, in the screen language (layout from standby_pages.py)
+    cv.text(1082.0, 300.0, i18n::get().standby[i], ko(30.0, false), [138, 151, 184]);
+    cv
 }

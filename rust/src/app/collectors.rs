@@ -87,76 +87,83 @@ pub fn start_collectors(st: &Shared, ai_enabled: bool) {
         (last, Duration::from_secs_f64(wait))
     };
 
-    let mut claude = Claude::new(cache.clone());
-    let (last, wait) = first_delay("Claude", CLAUDE_INTERVAL);
-    {
-        let mut g = st.lock().unwrap();
-        if let Some(u) = last {
-            g.ai.insert("Claude", u);
-        } else if ai::now() < claude.not_before() {
-            g.ai_err.insert("Claude", AiErr::RateLimited(claude.not_before()));
-        }
-    }
-    let (s, c) = (st.clone(), cache.clone());
-    thread::Builder::new()
-        .name("claude".into())
-        .spawn(move || {
-            thread::sleep(wait);
-            loop {
-                // Usage API every 15 min. When it fails (rate limit, auth, network), read Claude
-                // Code's /usage panel right away and then every 5 min, until the wait the server
-                // asked for (Retry-After) is over, or 15 min without one; then the API again.
-                let t = Instant::now();
-                let api_err = match claude.fetch() {
-                    Ok(u) => {
-                        set_ai(&s, &c, "Claude", Ok(u));
-                        let next = (CLAUDE_INTERVAL - t.elapsed().as_secs_f64()).max(0.0);
-                        thread::sleep(Duration::from_secs_f64(until_reset(&s, "Claude").map_or(next, |r| r.min(next))));
-                        continue;
-                    }
-                    Err(e) => e,
-                };
-                let retry_at = match api_err.downcast_ref::<ai::RateLimited>() {
-                    Some(r) => r.0,
-                    None => ai::now() + CLAUDE_INTERVAL,
-                };
-                log::info!("Claude API failed ({api_err:#}); reading /usage via CLI every 5 min, API again in {:.0} min",
-                    ((retry_at - ai::now()) / 60.0).max(0.0));
-                let mut api_err = Some(api_err);
-                loop {
-                    let r = match ClaudeCli.fetch(Duration::from_secs(45)) {
-                        Ok(u) => Ok(u),
-                        Err(cli_err) => {
-                            log::warn!("Claude CLI read failed: {cli_err:#}");
-                            // keep showing why the API is unavailable
-                            Err(api_err.take().unwrap_or_else(|| cli_err))
-                        }
-                    };
-                    set_ai(&s, &c, "Claude", r);
-                    let left = retry_at - ai::now();
-                    let tick = until_reset(&s, "Claude").map_or(CLAUDE_CLI_INTERVAL, |r| r.min(CLAUDE_CLI_INTERVAL));
-                    if left <= tick {
-                        thread::sleep(Duration::from_secs_f64(left.max(0.0)));
-                        break; // API's turn
-                    }
-                    thread::sleep(Duration::from_secs_f64(tick));
-                }
+    let on = &crate::config::get().ai;
+    if on.claude {
+        let mut claude = Claude::new(cache.clone());
+        let (last, wait) = first_delay("Claude", CLAUDE_INTERVAL);
+        {
+            let mut g = st.lock().unwrap();
+            if let Some(u) = last {
+                g.ai.insert("Claude", u);
+            } else if ai::now() < claude.not_before() {
+                g.ai_err.insert("Claude", AiErr::RateLimited(claude.not_before()));
             }
-        })
-        .expect("spawn thread");
-
-    let (last, wait) = first_delay("Codex", AI_INTERVAL);
-    if let Some(u) = last {
-        st.lock().unwrap().ai.insert("Codex", u);
+        }
+        let (s, c) = (st.clone(), cache.clone());
+        thread::Builder::new()
+            .name("claude".into())
+            .spawn(move || {
+                thread::sleep(wait);
+                loop {
+                    // Usage API every 15 min. When it fails (rate limit, auth, network), read Claude
+                    // Code's /usage panel right away and then every 5 min, until the wait the server
+                    // asked for (Retry-After) is over, or 15 min without one; then the API again.
+                    let t = Instant::now();
+                    let api_err = match claude.fetch() {
+                        Ok(u) => {
+                            set_ai(&s, &c, "Claude", Ok(u));
+                            let next = (CLAUDE_INTERVAL - t.elapsed().as_secs_f64()).max(0.0);
+                            thread::sleep(Duration::from_secs_f64(until_reset(&s, "Claude").map_or(next, |r| r.min(next))));
+                            continue;
+                        }
+                        Err(e) => e,
+                    };
+                    let retry_at = match api_err.downcast_ref::<ai::RateLimited>() {
+                        Some(r) => r.0,
+                        None => ai::now() + CLAUDE_INTERVAL,
+                    };
+                    log::info!("Claude API failed ({api_err:#}); reading /usage via CLI every 5 min, API again in {:.0} min",
+                        ((retry_at - ai::now()) / 60.0).max(0.0));
+                    let mut api_err = Some(api_err);
+                    loop {
+                        let r = match ClaudeCli.fetch(Duration::from_secs(45)) {
+                            Ok(u) => Ok(u),
+                            Err(cli_err) => {
+                                log::warn!("Claude CLI read failed: {cli_err:#}");
+                                // keep showing why the API is unavailable
+                                Err(api_err.take().unwrap_or_else(|| cli_err))
+                            }
+                        };
+                        set_ai(&s, &c, "Claude", r);
+                        let left = retry_at - ai::now();
+                        let tick = until_reset(&s, "Claude").map_or(CLAUDE_CLI_INTERVAL, |r| r.min(CLAUDE_CLI_INTERVAL));
+                        if left <= tick {
+                            thread::sleep(Duration::from_secs_f64(left.max(0.0)));
+                            break; // API's turn
+                        }
+                        thread::sleep(Duration::from_secs_f64(tick));
+                    }
+                }
+            })
+            .expect("spawn thread");
     }
-    let (s, c) = (st.clone(), cache.clone());
-    every("codex", Duration::from_secs_f64(AI_INTERVAL), wait, move || set_ai(&s, &c, "Codex", ai::codex()));
 
-    let (last, wait) = first_delay("Antigravity", AI_INTERVAL);
-    if let Some(u) = last {
-        st.lock().unwrap().ai.insert("Antigravity", u);
+    if on.codex {
+        let (last, wait) = first_delay("Codex", AI_INTERVAL);
+        if let Some(u) = last {
+            st.lock().unwrap().ai.insert("Codex", u);
+        }
+        let (s, c) = (st.clone(), cache.clone());
+        every("codex", Duration::from_secs_f64(AI_INTERVAL), wait, move || set_ai(&s, &c, "Codex", ai::codex()));
     }
-    let (s, c) = (st.clone(), cache);
-    let mut agy = Antigravity::new();
-    every("antigravity", Duration::from_secs_f64(AI_INTERVAL), wait, move || set_ai(&s, &c, "Antigravity", agy.fetch()));
+
+    if on.antigravity {
+        let (last, wait) = first_delay("Antigravity", AI_INTERVAL);
+        if let Some(u) = last {
+            st.lock().unwrap().ai.insert("Antigravity", u);
+        }
+        let (s, c) = (st.clone(), cache.clone());
+        let mut agy = Antigravity::new();
+        every("antigravity", Duration::from_secs_f64(AI_INTERVAL), wait, move || set_ai(&s, &c, "Antigravity", agy.fetch()));
+    }
 }

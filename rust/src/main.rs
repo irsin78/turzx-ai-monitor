@@ -3,6 +3,7 @@
 mod app;
 mod config;
 mod diag;
+mod i18n;
 mod logging;
 #[cfg(mascots)]
 mod mascot {
@@ -38,6 +39,7 @@ fn main() -> Result<()> {
         std::panic::set_hook(Box::new(|info| log::error!("panic: {info}")));
         log::info!("dashboard starting (admin: {})", pawnio::is_admin());
         app::supervisor::eco_mode();
+        config::watch();
         app::run(!arg("--no-ai"));
     }
     if !app::supervisor::single_instance() {

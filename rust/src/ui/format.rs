@@ -6,22 +6,28 @@ pub(super) fn temp_color(t: f64) -> Rgb {
     if t < 70.0 { INK } else if t < 85.0 { WARN } else { HOT }
 }
 
+/// The largest of `sizes` at which `s` fits in `max_w` (translations differ a lot in length).
+pub(super) fn fit_ko(cv: &Canvas, s: &str, sizes: &[f32], bold: bool, max_w: f32) -> Font_ {
+    sizes.iter().map(|&z| ko(z, bold)).find(|&f| cv.text_len(s, f) <= max_w).unwrap_or(ko(*sizes.last().unwrap(), bold))
+}
+
+/// Temperature in the unit from the settings (sensors and weather report °C).
+pub(super) fn deg(c: f64) -> f64 {
+    if config::get().fahrenheit() { c * 9.0 / 5.0 + 32.0 } else { c }
+}
+
 pub(super) fn fmt_left(reset: Option<f64>) -> String {
-    let Some(reset) = reset else { return String::new() };
-    let s = (reset - epoch_now()).max(0.0) as i64;
-    let (d, h, m) = (s / 86400, s % 86400 / 3600, s % 3600 / 60);
-    if d > 0 { format!("{d}일 {h}시간") } else if h > 0 { format!("{h}시간 {m}분") } else { format!("{m}분") }
+    reset.map_or(String::new(), |r| i18n::get().time_left((r - epoch_now()) as i64))
 }
 
 pub(super) fn err_text(e: &AiErr) -> String {
+    let t = i18n::get();
     match e {
-        AiErr::RateLimited(until) => {
-            let left = fmt_left(Some(*until));
-            format!("요청 제한 · {} 후 재시도", if left.is_empty() { "곧".into() } else { left })
-        }
-        AiErr::Http(401) => "로그인 만료 · Claude Code 실행 필요".into(),
-        AiErr::Http(c) => format!("조회 실패 ({c})"),
-        AiErr::Other(s) => format!("조회 실패 ({s})"),
+        AiErr::RateLimited(until) if *until > epoch_now() + 30.0 => fill(t.rate_limited, fmt_left(Some(*until))),
+        AiErr::RateLimited(_) => t.rate_limited_soon.into(),
+        AiErr::Http(401) => t.signed_out.into(),
+        AiErr::Http(c) => fill(t.failed, c),
+        AiErr::Other(s) => fill(t.failed, s),
     }
 }
 
