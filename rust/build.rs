@@ -2,7 +2,7 @@
 //! they are not in this repository. If a mascot folder with `mascot.rs` and its art is found,
 //! it is built in; otherwise the dashboard builds without mascots.
 //!
-//! Looked up in: `$TURZX_MASCOTS`, `../assets/mascots`, `../../assets/mascots` (a private
+//! Looked up in: `$TURZX_MASCOTS` (`off` builds without them), `../assets/mascots`, `../../assets/mascots` (a private
 //! repository that has this one as a submodule).
 
 use std::path::PathBuf;
@@ -12,6 +12,9 @@ const FILES: [&str; 5] = ["mascot.rs", "clawd.png", "clawd.json", "codex.png", "
 fn main() {
     println!("cargo::rustc-check-cfg=cfg(mascots)");
     println!("cargo::rerun-if-env-changed=TURZX_MASCOTS");
+    if std::env::var("TURZX_MASCOTS").is_ok_and(|v| v.eq_ignore_ascii_case("off")) {
+        return; // build the public flavor even when the art is around (screenshots, releases)
+    }
     let candidates = std::env::var_os("TURZX_MASCOTS")
         .map(PathBuf::from)
         .into_iter()

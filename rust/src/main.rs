@@ -4,6 +4,7 @@ mod app;
 mod config;
 mod diag;
 mod i18n;
+mod install;
 mod logging;
 #[cfg(mascots)]
 mod mascot {
@@ -31,8 +32,29 @@ fn main() -> Result<()> {
     logging::init();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let arg = |a: &str| args.iter().any(|x| x == a);
-    if args.first().map(String::as_str) == Some("diag") {
-        return diag::run(args.get(1).map_or("", String::as_str));
+    let done = |r: anyhow::Result<String>| -> Result<()> {
+        match r {
+            Ok(msg) if !msg.is_empty() => install::tell(&msg, false),
+            Ok(_) => {}
+            Err(e) => {
+                log::error!("{e:#}");
+                install::tell(&format!("{e:#}"), true);
+                std::process::exit(1);
+            }
+        }
+        Ok(())
+    };
+    match args.first().map(String::as_str) {
+        Some("diag") => return diag::run(args.get(1).map_or("", String::as_str)),
+        Some("install") => return done(install::install(!arg("--no-autostart"))),
+        Some("uninstall") => return done(install::uninstall(arg("--purge"))),
+        Some("autostart") => return done(install::autostart(args.get(1).map(String::as_str) != Some("off"))),
+        Some("settings") => return done(install::settings()),
+        Some("--help" | "-h" | "help") => {
+            install::tell(USAGE, false);
+            return Ok(());
+        }
+        _ => {}
     }
     if arg("--worker") {
         // the dashboard proper, run (and restarted) by the supervisor below
@@ -42,6 +64,12 @@ fn main() -> Result<()> {
         config::watch();
         app::run(!arg("--no-ai"));
     }
+    // double-clicked outside the install folder: offer to install
+    if args.is_empty() && !install::running_installed() && install::ask("Install TURZX AI Monitor and start it with Windows?
+
+No: just run it this time.") {
+        return done(install::install(true));
+    }
     if !app::supervisor::single_instance() {
         log::warn!("another dashboard is already running; exiting");
         return Ok(());
@@ -50,3 +78,14 @@ fn main() -> Result<()> {
     app::supervisor::eco_mode();
     app::supervisor::supervise()
 }
+
+const USAGE: &str = "turzx-dashboard [command]
+
+  (none)                  run the dashboard (offers to install when run from elsewhere)
+  run                     run the dashboard without asking
+  install [--no-autostart]
+  uninstall [--purge]     --purge also removes settings, logs and caches
+  autostart on|off
+  settings                open the settings file
+  diag <command>          previews and diagnostics (diag help)
+";
