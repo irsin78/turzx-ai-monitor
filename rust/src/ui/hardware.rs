@@ -109,7 +109,7 @@ pub(super) fn draw_hardware(cv: &mut Canvas, st: &State, x: f32, right: f32) {
     ];
     let gx = x + 150.0;
     for (i, (label, key, val, total, unit, temp, power)) in rows.into_iter().enumerate() {
-        let y = TOP + i as f32 * 84.0;
+        let y = TOP + i as f32 * HW_ROW;
         cv.caps(x, y, label, 16.0, None, 2.5, false);
         if let Some(power) = power {
             // package / board power, right-aligned in the gap before the graph
@@ -156,21 +156,21 @@ pub(super) fn draw_hardware(cv: &mut Canvas, st: &State, x: f32, right: f32) {
     }
 
     // bottom row: small headings, then network speeds and disk temperatures under them
-    let y = TOP + 4.0 * 84.0 + 6.0;
+    let y = TOP + 4.0 * HW_ROW + 6.0;
     cv.line(&[(x, y - 10.0), (right, y - 10.0)], 1.0, RULE);
-    let (top, h) = (y + 18.0, 48.0); // graphs under the headings
-    let (f_val, f_unit) = (num(28.0, Face::Num), num(15.0, Face::NumSemi));
+    let (top, h) = (y + 22.0, BOTTOM - y - 20.0); // graphs under the headings
+    let (f_val, f_unit) = (num(34.0, Face::Num), num(17.0, Face::NumSemi));
     cv.caps(x, y, "Network", 14.0, None, 2.0, false);
     for (j, (label, key, rate)) in [("Down", "net_down", hw.net_down), ("Up", "net_up", hw.net_up)].into_iter().enumerate() {
         let nx = x + j as f32 * 150.0;
         bg_graph(cv, nx, top, 138.0, h, &st.hist[key], 125_000.0, None); // floor 1 Mbps
-        cv.caps(nx, y + 21.0, label, 12.0, Some(MUTED), 2.0, false);
+        cv.caps(nx, y + 26.0, label, 14.0, Some(MUTED), 2.0, false);
         match rate {
-            None => cv.text(nx, y + 35.0, "--", f_val, FAINT),
+            None => cv.text(nx, y + 46.0, "--", f_val, FAINT),
             Some(rate) => {
                 let (val, unit) = fmt_rate(rate);
-                cv.text(nx, y + 35.0, &val, f_val, INK);
-                cv.text(nx + cv.text_len(&val, f_val) + 4.0, y + 46.0, unit, f_unit, MUTED);
+                cv.text(nx, y + 46.0, &val, f_val, INK);
+                cv.text(nx + cv.text_len(&val, f_val) + 5.0, y + 60.0, unit, f_unit, MUTED);
             }
         }
     }
@@ -184,12 +184,12 @@ pub(super) fn draw_hardware(cv: &mut Canvas, st: &State, x: f32, right: f32) {
         let dx = dx0 + i as f32 * cw;
         bg_graph(cv, dx, top, cw - 12.0, h, &st.hist[["disk0", "disk1"][i.min(1)]], 0.0, Some(10.0));
         // model names vary in length: shrink the name to its cell
-        let size = [12.0, 11.0, 10.0, 9.0].into_iter().find(|&z| cv.caps_len(label, z, 1.5) <= cw - 14.0).unwrap_or(9.0);
-        cv.caps(dx, y + 21.0, label, size, Some(MUTED), 1.5, false);
-        let f = num(28.0, Face::NumLight);
+        let size = [14.0, 13.0, 12.0, 11.0, 10.0].into_iter().find(|&z| cv.caps_len(label, z, 2.0) <= cw - 14.0).unwrap_or(10.0);
+        cv.caps(dx, y + 26.0, label, size, Some(MUTED), 2.0, false);
+        let f = num(36.0, Face::NumLight);
         match temp {
-            None => cv.text(dx, y + 35.0, "--°", f, FAINT),
-            Some(t) => cv.text(dx, y + 35.0, &format!("{:.0}°", deg(*t)), f, temp_color(*t)),
+            None => cv.text(dx, y + 44.0, "--°", f, FAINT),
+            Some(t) => cv.text(dx, y + 44.0, &format!("{:.0}°", deg(*t)), f, temp_color(*t)),
         }
     }
 }

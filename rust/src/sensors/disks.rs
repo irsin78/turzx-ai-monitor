@@ -3,7 +3,7 @@
 //!
 //! Which drives: the ones holding the drive letters in the settings (`[disks] show`), or else
 //! the first two internal drives (USB and virtual disks are skipped). Each is labeled with its
-//! model, shortened ("Samsung SSD 990 PRO 1TB" -> "Samsung 990 PRO", "CT2000T710SSD8" -> "Crucial T710"), or the
+//! model, shortened ("Samsung SSD 990 PRO 1TB" -> "990 PRO", "CT2000T710SSD8" -> "T710"), or the
 //! name in `[disks] labels`, or "Disk N" (the Windows disk number) when the model is unknown.
 
 use std::collections::BTreeMap;
@@ -113,10 +113,13 @@ fn model(number: u32) -> Option<String> {
     Some(String::from_utf8_lossy(&buf[at..end]).trim().to_string())
 }
 
-/// A readable name from a product id: vendor and model, without "SSD", the capacity or a
-/// part-number wrapper ("Samsung SSD 990 PRO 1TB" -> "Samsung 990 PRO", "CT2000T710SSD8" ->
-/// "Crucial T710").
+/// The model part of a product id: no vendor, "SSD", capacity or part-number wrapper
+/// ("Samsung SSD 990 PRO 1TB" -> "990 PRO", "CT2000T710SSD8" -> "T710").
 fn short_model(id: &str) -> String {
+    const VENDORS: [&str; 17] = [
+        "samsung", "crucial", "wdc", "wd", "western", "digital", "kingston", "sk", "hynix", "seagate", "sabrent", "adata", "lexar",
+        "micron", "intel", "toshiba", "kioxia",
+    ];
     let capacity = |t: &str| {
         let l = t.to_ascii_lowercase();
         let digits = l.trim_end_matches("gb").trim_end_matches("tb").trim_end_matches('g').trim_end_matches('t');
@@ -124,15 +127,16 @@ fn short_model(id: &str) -> String {
     };
     let words: Vec<String> = id
         .split_whitespace()
-        .filter(|w| !w.eq_ignore_ascii_case("ssd") && !capacity(w))
+        .filter(|w| !VENDORS.contains(&w.to_ascii_lowercase().as_str()) && !w.eq_ignore_ascii_case("ssd") && !capacity(w))
         .map(|w| {
-            // Crucial part numbers: CT2000T710SSD8 -> Crucial T710
+            // Crucial part numbers: CT2000T710SSD8 -> T710
             let up = w.to_ascii_uppercase();
             match (up.strip_prefix("CT"), up.find("SSD")) {
-                (Some(rest), Some(i)) if i > 2 => format!("Crucial {}", rest[..i - 2].trim_start_matches(|c: char| c.is_ascii_digit())),
+                (Some(rest), Some(i)) if i > 2 => rest[..i - 2].trim_start_matches(|c: char| c.is_ascii_digit()).to_string(),
                 _ => w.to_string(),
             }
         })
+        .filter(|w| !w.is_empty())
         .collect();
     words.join(" ")
 }
@@ -141,8 +145,8 @@ fn short_model(id: &str) -> String {
 mod tests {
     #[test]
     fn short_models() {
-        assert_eq!(super::short_model("Samsung SSD 990 PRO 1TB"), "Samsung 990 PRO");
-        assert_eq!(super::short_model("CT2000T710SSD8"), "Crucial T710");
+        assert_eq!(super::short_model("Samsung SSD 990 PRO 1TB"), "990 PRO");
+        assert_eq!(super::short_model("CT2000T710SSD8"), "T710");
         assert_eq!(super::short_model("WD_BLACK SN850X 2000GB"), "WD_BLACK SN850X");
     }
 }

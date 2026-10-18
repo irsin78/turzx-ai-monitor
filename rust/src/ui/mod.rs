@@ -81,6 +81,8 @@ const RULES_X: [f32; 2] = [676.0, 1288.0];
 const TOP: f32 = 36.0;
 const BOTTOM: f32 = 444.0;
 
+/// Pitch of the CPU / memory / GPU / VRAM rows (leaves room for the network and disk row).
+const HW_ROW: f32 = 76.0;
 pub const GRAPH_W: f32 = 250.0;
 const GRAPH_H: f32 = 56.0;
 const GRAPH_STEP: f32 = 2.0;
@@ -118,6 +120,6 @@ pub fn render(st: &State, now: DateTime<Local>) -> Canvas {
 
     cv.glow((ax - 20.0) as u32, 0, (cal_x - 10.0) as u32, 240); // clock
     let gx = COL_B.0 + 150.0;
-    cv.glow((gx - 10.0) as u32, (TOP - 10.0) as u32, (gx + GRAPH_W + 10.0) as u32, (TOP + 3.0 * 84.0 + GRAPH_H + 20.0) as u32);
+    cv.glow((gx - 10.0) as u32, (TOP - 10.0) as u32, (gx + GRAPH_W + 10.0) as u32, (TOP + 3.0 * HW_ROW + GRAPH_H + 20.0) as u32);
     cv
 }
