@@ -35,9 +35,9 @@ impl AiErr {
     }
 }
 
-pub const HIST_KEYS: [&str; 13] = [
+pub const HIST_KEYS: [&str; 15] = [
     "cpu", "ram", "gpu", "vram", "net_down", "net_up", "fan_radiator", "fan_pump", "fan_gpu",
-    "cpu_temp", "ram_temp", "gpu_temp", "vram_temp",
+    "cpu_temp", "ram_temp", "gpu_temp", "vram_temp", "disk0", "disk1",
 ];
 
 #[derive(Clone, Default)]
@@ -69,6 +69,8 @@ impl State {
             ("fan_radiator", hw.fan_radiator), ("fan_pump", hw.fan_pump), ("fan_gpu", hw.fan_gpu),
             ("cpu_temp", hw.cpu_temp), ("ram_temp", hw.ram_temp), ("gpu_temp", hw.gpu_temp),
             ("vram_temp", hw.vram_temp),
+            ("disk0", hw.disks.first().and_then(|d| d.1)),
+            ("disk1", hw.disks.get(1).and_then(|d| d.1)),
         ];
         for (k, v) in values {
             let h = self.hist.get_mut(k).unwrap();

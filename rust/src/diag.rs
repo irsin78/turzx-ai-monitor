@@ -38,18 +38,20 @@ pub fn fake_state() -> state::State {
         gpu: Some(4.0), gpu_temp: Some(37.0), gpu_power: Some(24.0), vram_used: Some(2.7), vram_total: Some(15.9), vram_temp: Some(48.0),
         fan_radiator: Some(872.0), fan_pump: Some(3392.0), fan_gpu: Some(1167.0),
         net_down: Some(49_200.0 / 8.0), net_up: Some(29_000.0 / 8.0),
+        disks: vec![("C:".into(), Some(71.0)), ("D:".into(), Some(69.0))],
     };
     let mut seed = 12345u32;
     let mut rnd = move || {
         seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
         (seed >> 16) as f64 / 65535.0 * 2.0 - 1.0
     };
-    let series: [(&str, f64, f64, f64, f64); 13] = [
+    let series: [(&str, f64, f64, f64, f64); 15] = [
         // key, base, bump amplitude, bump center, noise
         ("cpu", 15.0, 55.0, 70.0, 4.0), ("ram", 22.0, 0.0, 70.0, 4.0), ("gpu", 30.0, 55.0, 70.0, 4.0), ("vram", 16.0, 0.0, 70.0, 4.0),
         ("net_down", 3e5, 4e6, 75.0, 1.5e4), ("net_up", 5e4, 6e5, 75.0, 2.5e3), ("fan_radiator", 880.0, 400.0, 75.0, 44.0),
         ("fan_pump", 3390.0, 30.0, 75.0, 170.0), ("fan_gpu", 1165.0, 500.0, 75.0, 58.0), ("cpu_temp", 44.0, 18.0, 75.0, 2.2),
         ("ram_temp", 46.0, 2.0, 75.0, 2.3), ("gpu_temp", 36.0, 14.0, 75.0, 1.8), ("vram_temp", 46.0, 6.0, 75.0, 2.3),
+        ("disk0", 68.0, 4.0, 80.0, 0.8), ("disk1", 66.0, 3.0, 82.0, 0.8),
     ];
     for (k, base, amp, center, noise) in series {
         let h = st.hist.get_mut(k).unwrap();

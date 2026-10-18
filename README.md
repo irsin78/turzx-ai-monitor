@@ -22,7 +22,8 @@ When Windows shuts down, the panel switches to a standby screen and keeps it unt
 - **AI plan usage**: what is left of the 5-hour and weekly limits, with the time until each resets.
   Refreshes right after a reset.
 - **Hardware**: CPU (with per-core graphs), memory, GPU and VRAM usage with history graphs,
-  temperatures, CPU package and GPU board power, two board fans and the GPU fan, network up/down.
+  temperatures, CPU package and GPU board power, two board fans and the GPU fan, network up/down,
+  and the temperature of two SSDs.
 - **Clock and calendar** (12/24-hour) with the public holidays of your country.
 - **Weather** for your city: now, tomorrow, sunrise/sunset, PM2.5/PM10 with Korean or US AQI grades.
 - **16 languages**: English, 한국어, 日本語, 简体中文, 繁體中文, Español, Français, Deutsch,
@@ -92,6 +93,9 @@ antigravity = true
 
 [fans]
 labels = []              # e.g. ["Radiator", "Pump", "GPU"]
+
+[disks]
+show = []                # SSD temperatures: up to two drive letters, e.g. ["C", "D"]; empty = first two internal drives
 ```
 
 ## How the AI usage is read

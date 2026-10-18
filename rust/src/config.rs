@@ -24,6 +24,7 @@ pub struct Config {
     pub air_quality: AirQuality,
     pub ai: Ai,
     pub fans: Fans,
+    pub disks: Disks,
 }
 
 /// Where the weather and air quality are for.
@@ -58,6 +59,14 @@ pub struct Ai {
     pub antigravity: bool,
 }
 
+/// SSD temperatures in the network row.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct Disks {
+    /// drive letters of up to two drives, e.g. ["C", "D"]; empty = the first two internal drives
+    pub show: Vec<String>,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Fans {
@@ -76,6 +85,7 @@ impl Default for Config {
             air_quality: AirQuality { scale: "auto".into() },
             ai: Ai { claude: true, codex: true, antigravity: true },
             fans: Fans { labels: Vec::new() },
+            disks: Disks::default(),
         }
     }
 }
@@ -206,6 +216,11 @@ antigravity = {agy}
 # Names for the two board fan channels and the GPU fan, e.g. ["Radiator", "Pump", "GPU"];
 # empty = default names in the chosen language
 labels = [{labels}]
+
+[disks]
+# SSD temperatures next to the network speeds: drive letters of up to two drives,
+# e.g. ["C", "D"]; empty = the first two internal drives
+show = [{disks}]
 "#,
         lang = c.language,
         clock = c.clock,
@@ -221,6 +236,7 @@ labels = [{labels}]
         codex = c.ai.codex,
         agy = c.ai.antigravity,
         labels = c.fans.labels.iter().map(|l| format!("{l:?}")).collect::<Vec<_>>().join(", "),
+        disks = c.disks.show.iter().map(|l| format!("{l:?}")).collect::<Vec<_>>().join(", "),
     )
 }
 

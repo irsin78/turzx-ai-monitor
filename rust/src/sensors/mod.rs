@@ -7,6 +7,7 @@ use nvml_wrapper::enum_wrappers::device::TemperatureSensor;
 use nvml_wrapper::Nvml;
 use sysinfo::{Networks, System};
 
+pub mod disks;
 mod nvapi;
 pub mod pawnio;
 
@@ -32,6 +33,8 @@ pub struct Hardware {
     pub fan_gpu: Option<f64>,
     pub net_down: Option<f64>, // bytes/s
     pub net_up: Option<f64>,
+    /// SSD temperatures (°C) with their drive letter, up to `disks::MAX`
+    pub disks: Vec<(String, Option<f64>)>,
 }
 
 /// Physically installed memory in bytes (GetPhysicallyInstalledSystemMemory reports KiB).
@@ -52,6 +55,8 @@ pub struct HardwareReader {
     dimms: Option<pawnio::Ddr5Temps>,
     ram_temp: Option<f64>,
     ram_next: Instant,
+    disks: Vec<disks::Disk>,
+    disk_temps: Vec<Option<f64>>,
     energy_prev: Option<(u32, Instant)>,
 }
 
@@ -84,6 +89,8 @@ impl HardwareReader {
             dimms,
             ram_temp: None,
             ram_next: Instant::now(),
+            disks: disks::pick(),
+            disk_temps: Vec::new(),
             energy_prev: None,
         }
     }
@@ -157,10 +164,15 @@ impl HardwareReader {
             if Instant::now() >= self.ram_next {
                 // DIMM temperatures change slowly; spare the SMBus
                 self.ram_temp = d.read().ok().flatten();
-                self.ram_next = Instant::now() + std::time::Duration::from_secs(5);
             }
         }
+        if Instant::now() >= self.ram_next {
+            // DIMM and SSD temperatures change slowly: every 5 s
+            self.disk_temps = self.disks.iter().map(|d| d.temperature()).collect();
+            self.ram_next = Instant::now() + std::time::Duration::from_secs(5);
+        }
         hw.ram_temp = self.ram_temp;
+        hw.disks = self.disks.iter().zip(&self.disk_temps).map(|(d, t)| (d.label.clone(), *t)).collect();
         hw
     }
 }
