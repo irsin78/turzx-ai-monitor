@@ -3,7 +3,7 @@
 //!
 //! Which drives: the ones holding the drive letters in the settings (`[disks] show`), or else
 //! the first two internal drives (USB and virtual disks are skipped). Each is labeled with its
-//! first drive letter.
+//! Windows disk number ("Disk 0"), as in Disk Management.
 
 use std::collections::BTreeMap;
 
@@ -23,7 +23,7 @@ use crate::config;
 
 pub const MAX: usize = 2;
 
-/// A drive to watch: its physical disk number and label ("C:").
+/// A drive to watch: its physical disk number and label ("Disk 0").
 pub struct Disk {
     number: u32,
     pub label: String,
@@ -83,21 +83,21 @@ pub fn pick() -> Vec<Disk> {
     let map = drives();
     let wanted: Vec<char> = config::get().disks.show.iter().filter_map(|s| s.trim().chars().next()).map(|c| c.to_ascii_uppercase()).collect();
     let mut out: Vec<Disk> = Vec::new();
-    let mut add = |number: u32, letters: &[char]| {
+    let mut add = |number: u32| {
         if out.len() < MAX && !out.iter().any(|d| d.number == number) {
-            out.push(Disk { number, label: format!("{}:", letters.first().copied().unwrap_or('?')) });
+            out.push(Disk { number, label: format!("Disk {number}") });
         }
     };
     if wanted.is_empty() {
-        for (n, (inside, letters)) in &map {
+        for (n, (inside, _)) in &map {
             if *inside {
-                add(*n, letters);
+                add(*n);
             }
         }
     } else {
         for w in wanted {
-            if let Some((n, (_, letters))) = map.iter().find(|(_, (_, l))| l.contains(&w)) {
-                add(*n, &[w].into_iter().chain(letters.iter().copied().filter(|&c| c != w)).collect::<Vec<_>>());
+            if let Some((n, _)) = map.iter().find(|(_, (_, letters))| letters.contains(&w)) {
+                add(*n);
             }
         }
     }

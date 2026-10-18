@@ -158,7 +158,7 @@ pub(super) fn draw_hardware(cv: &mut Canvas, st: &State, x: f32, right: f32) {
     let y = TOP + 4.0 * 84.0 + 6.0;
     cv.line(&[(x, y - 10.0), (right, y - 10.0)], 1.0, RULE);
     cv.caps(x, y + 4.0, "Network", 16.0, None, 2.5, false);
-    // with SSD temperatures in the temperature column, the network speeds sit closer together
+    // with disk temperatures in the temperature column, the network speeds sit closer together
     let disks = !hw.disks.is_empty();
     let (step, graph_w, size) = if disks { (138.0, 124.0, 30.0) } else { (200.0, 180.0, 32.0) };
     for (j, (label, key, rate)) in [("Down", "net_down", hw.net_down), ("Up", "net_up", hw.net_up)].into_iter().enumerate() {
@@ -175,13 +175,13 @@ pub(super) fn draw_hardware(cv: &mut Canvas, st: &State, x: f32, right: f32) {
             }
         }
     }
-    // SSD temperatures, in line with the temperature column above
+    // disk temperatures, in line with the temperature column above
     let tx = gx + GRAPH_W + 26.0;
     let cw = (right - tx + 4.0) / crate::sensors::disks::MAX as f32;
     for (i, (label, temp)) in hw.disks.iter().enumerate() {
         let dx = tx + i as f32 * cw;
         bg_graph(cv, dx - 4.0, y + 2.0, cw - 6.0, 66.0, &st.hist[["disk0", "disk1"][i.min(1)]], 0.0, Some(10.0));
-        cv.caps(dx, y + 4.0, &format!("SSD {}", label.trim_end_matches(':')), 14.0, Some(MUTED), 2.0, false);
+        cv.caps(dx, y + 4.0, label, 14.0, Some(MUTED), 2.0, false);
         let f = num(30.0, Face::NumLight);
         match temp {
             None => cv.text(dx, y + 26.0, "--°", f, FAINT),

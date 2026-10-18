@@ -33,7 +33,7 @@ pub struct Hardware {
     pub fan_gpu: Option<f64>,
     pub net_down: Option<f64>, // bytes/s
     pub net_up: Option<f64>,
-    /// SSD temperatures (°C) with their drive letter, up to `disks::MAX`
+    /// disk temperatures (°C) with their label ("Disk 0"), up to `disks::MAX`
     pub disks: Vec<(String, Option<f64>)>,
 }
 
