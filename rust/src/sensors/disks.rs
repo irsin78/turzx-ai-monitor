@@ -3,7 +3,8 @@
 //!
 //! Which drives: the ones holding the drive letters in the settings (`[disks] show`), or else
 //! the first two internal drives (USB and virtual disks are skipped). Each is labeled with its
-//! Windows disk number ("Disk 0"), as in Disk Management.
+//! model, shortened ("Samsung SSD 990 PRO 1TB" -> "Samsung 990 PRO", "CT2000T710SSD8" -> "Crucial T710"), or the
+//! name in `[disks] labels`, or "Disk N" (the Windows disk number) when the model is unknown.
 
 use std::collections::BTreeMap;
 
@@ -23,7 +24,7 @@ use crate::config;
 
 pub const MAX: usize = 2;
 
-/// A drive to watch: its physical disk number and label ("Disk 0").
+/// A drive to watch: its physical disk number and label ("990 PRO").
 pub struct Disk {
     number: u32,
     pub label: String,
@@ -78,6 +79,74 @@ fn internal(number: u32) -> bool {
     d.is_some_and(|d| d.BusType != BusTypeUsb && d.BusType != BusTypeFileBackedVirtual && !d.RemovableMedia)
 }
 
+/// The drive's product id ("Samsung SSD 990 PRO 1TB").
+fn model(number: u32) -> Option<String> {
+    let h = open(&format!(r"\\.\PhysicalDrive{number}"))?;
+    let q = STORAGE_PROPERTY_QUERY { PropertyId: StorageDeviceProperty, QueryType: PropertyStandardQuery, ..Default::default() };
+    let mut buf = vec![0u8; 1024]; // the descriptor plus its strings
+    let mut got = 0u32;
+    let ok = unsafe {
+        DeviceIoControl(
+            h,
+            IOCTL_STORAGE_QUERY_PROPERTY,
+            Some(&q as *const _ as *const _),
+            std::mem::size_of::<STORAGE_PROPERTY_QUERY>() as u32,
+            Some(buf.as_mut_ptr().cast()),
+            buf.len() as u32,
+            Some(&mut got),
+            None,
+        )
+        .is_ok()
+    };
+    unsafe {
+        let _ = CloseHandle(h);
+    }
+    if !ok || (got as usize) < std::mem::size_of::<STORAGE_DEVICE_DESCRIPTOR>() {
+        return None;
+    }
+    let d: STORAGE_DEVICE_DESCRIPTOR = unsafe { std::ptr::read_unaligned(buf.as_ptr().cast()) };
+    let at = d.ProductIdOffset as usize;
+    if at == 0 || at >= got as usize {
+        return None;
+    }
+    let end = buf[at..got as usize].iter().position(|&b| b == 0).map_or(got as usize, |n| at + n);
+    Some(String::from_utf8_lossy(&buf[at..end]).trim().to_string())
+}
+
+/// A readable name from a product id: vendor and model, without "SSD", the capacity or a
+/// part-number wrapper ("Samsung SSD 990 PRO 1TB" -> "Samsung 990 PRO", "CT2000T710SSD8" ->
+/// "Crucial T710").
+fn short_model(id: &str) -> String {
+    let capacity = |t: &str| {
+        let l = t.to_ascii_lowercase();
+        let digits = l.trim_end_matches("gb").trim_end_matches("tb").trim_end_matches('g').trim_end_matches('t');
+        digits != l && !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit() || c == '.')
+    };
+    let words: Vec<String> = id
+        .split_whitespace()
+        .filter(|w| !w.eq_ignore_ascii_case("ssd") && !capacity(w))
+        .map(|w| {
+            // Crucial part numbers: CT2000T710SSD8 -> Crucial T710
+            let up = w.to_ascii_uppercase();
+            match (up.strip_prefix("CT"), up.find("SSD")) {
+                (Some(rest), Some(i)) if i > 2 => format!("Crucial {}", rest[..i - 2].trim_start_matches(|c: char| c.is_ascii_digit())),
+                _ => w.to_string(),
+            }
+        })
+        .collect();
+    words.join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn short_models() {
+        assert_eq!(super::short_model("Samsung SSD 990 PRO 1TB"), "Samsung 990 PRO");
+        assert_eq!(super::short_model("CT2000T710SSD8"), "Crucial T710");
+        assert_eq!(super::short_model("WD_BLACK SN850X 2000GB"), "WD_BLACK SN850X");
+    }
+}
+
 /// The drives to show (see the module comment).
 pub fn pick() -> Vec<Disk> {
     let map = drives();
@@ -85,7 +154,9 @@ pub fn pick() -> Vec<Disk> {
     let mut out: Vec<Disk> = Vec::new();
     let mut add = |number: u32| {
         if out.len() < MAX && !out.iter().any(|d| d.number == number) {
-            out.push(Disk { number, label: format!("Disk {number}") });
+            let custom = config::get().disks.labels.get(out.len()).filter(|l| !l.trim().is_empty()).cloned();
+            let label = custom.or_else(|| model(number).map(|m| short_model(&m))).filter(|l| !l.is_empty()).unwrap_or_else(|| format!("Disk {number}"));
+            out.push(Disk { number, label });
         }
     };
     if wanted.is_empty() {

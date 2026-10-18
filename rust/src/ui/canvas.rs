@@ -322,6 +322,17 @@ impl Canvas {
     }
 
     /// Letter-spaced uppercase label. right = anchor at the right end of the run.
+    /// Width of `caps(text, size, spacing)` without drawing it.
+    pub(super) fn caps_len(&self, text: &str, size: f32, spacing: f32) -> f32 {
+        let f = num(size, Face::NumSemi);
+        let (mut width, mut n) = (0.0, 0usize);
+        f.each(&text.to_uppercase(), |ch, sf| {
+            width += sf.h_advance(sf.glyph_id(ch));
+            n += 1;
+        });
+        width + spacing * n.saturating_sub(1) as f32
+    }
+
     pub(super) fn caps(&mut self, x: f32, y: f32, text: &str, size: f32, fill: Option<Rgb>, spacing: f32, right: bool) -> f32 {
         let f = num(size, Face::NumSemi);
         let text = text.to_uppercase();

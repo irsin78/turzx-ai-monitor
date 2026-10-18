@@ -96,6 +96,7 @@ labels = []              # e.g. ["Radiator", "Pump", "GPU"]
 
 [disks]
 show = []                # disk temperatures: up to two drive letters, e.g. ["C", "D"]; empty = first two internal drives
+labels = []              # names for them; empty = the drive model ("Samsung 990 PRO")
 ```
 
 ## How the AI usage is read

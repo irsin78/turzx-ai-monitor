@@ -38,7 +38,7 @@ pub fn fake_state() -> state::State {
         gpu: Some(4.0), gpu_temp: Some(37.0), gpu_power: Some(24.0), vram_used: Some(2.7), vram_total: Some(15.9), vram_temp: Some(48.0),
         fan_radiator: Some(872.0), fan_pump: Some(3392.0), fan_gpu: Some(1167.0),
         net_down: Some(49_200.0 / 8.0), net_up: Some(29_000.0 / 8.0),
-        disks: vec![("Disk 0".into(), Some(71.0)), ("Disk 1".into(), Some(69.0))],
+        disks: vec![("Crucial T710".into(), Some(71.0)), ("Samsung 990 PRO".into(), Some(69.0))],
     };
     let mut seed = 12345u32;
     let mut rnd = move || {

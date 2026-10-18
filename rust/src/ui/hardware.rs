@@ -155,37 +155,41 @@ pub(super) fn draw_hardware(cv: &mut Canvas, st: &State, x: f32, right: f32) {
         }
     }
 
+    // bottom row: small headings, then network speeds and disk temperatures under them
     let y = TOP + 4.0 * 84.0 + 6.0;
     cv.line(&[(x, y - 10.0), (right, y - 10.0)], 1.0, RULE);
-    cv.caps(x, y + 4.0, "Network", 16.0, None, 2.5, false);
-    // with disk temperatures in the temperature column, the network speeds sit closer together
-    let disks = !hw.disks.is_empty();
-    let (step, graph_w, size) = if disks { (138.0, 124.0, 30.0) } else { (200.0, 180.0, 32.0) };
+    let (top, h) = (y + 18.0, 48.0); // graphs under the headings
+    let (f_val, f_unit) = (num(28.0, Face::Num), num(15.0, Face::NumSemi));
+    cv.caps(x, y, "Network", 14.0, None, 2.0, false);
     for (j, (label, key, rate)) in [("Down", "net_down", hw.net_down), ("Up", "net_up", hw.net_up)].into_iter().enumerate() {
-        let nx = gx + j as f32 * step;
-        bg_graph(cv, nx, y + 2.0, graph_w, 66.0, &st.hist[key], 125_000.0, None); // floor 1 Mbps
-        cv.caps(nx, y + 4.0, label, 14.0, Some(MUTED), 2.0, false);
-        let f = num(size, Face::Num);
+        let nx = x + j as f32 * 150.0;
+        bg_graph(cv, nx, top, 138.0, h, &st.hist[key], 125_000.0, None); // floor 1 Mbps
+        cv.caps(nx, y + 21.0, label, 12.0, Some(MUTED), 2.0, false);
         match rate {
-            None => cv.text(nx, y + 26.0, "--", f, FAINT),
+            None => cv.text(nx, y + 35.0, "--", f_val, FAINT),
             Some(rate) => {
                 let (val, unit) = fmt_rate(rate);
-                cv.text(nx, y + 26.0, &val, f, INK);
-                cv.text(nx + cv.text_len(&val, f) + 5.0, y + 38.0, unit, num(16.0, Face::NumSemi), MUTED);
+                cv.text(nx, y + 35.0, &val, f_val, INK);
+                cv.text(nx + cv.text_len(&val, f_val) + 4.0, y + 46.0, unit, f_unit, MUTED);
             }
         }
     }
-    // disk temperatures, in line with the temperature column above
-    let tx = gx + GRAPH_W + 26.0;
-    let cw = (right - tx + 4.0) / crate::sensors::disks::MAX as f32;
+    if hw.disks.is_empty() {
+        return;
+    }
+    let dx0 = x + 300.0;
+    let cw = (right - dx0) / crate::sensors::disks::MAX as f32;
+    cv.caps(dx0, y, "Disk", 14.0, None, 2.0, false);
     for (i, (label, temp)) in hw.disks.iter().enumerate() {
-        let dx = tx + i as f32 * cw;
-        bg_graph(cv, dx - 4.0, y + 2.0, cw - 6.0, 66.0, &st.hist[["disk0", "disk1"][i.min(1)]], 0.0, Some(10.0));
-        cv.caps(dx, y + 4.0, label, 14.0, Some(MUTED), 2.0, false);
-        let f = num(30.0, Face::NumLight);
+        let dx = dx0 + i as f32 * cw;
+        bg_graph(cv, dx, top, cw - 12.0, h, &st.hist[["disk0", "disk1"][i.min(1)]], 0.0, Some(10.0));
+        // model names vary in length: shrink the name to its cell
+        let size = [12.0, 11.0, 10.0, 9.0].into_iter().find(|&z| cv.caps_len(label, z, 1.5) <= cw - 14.0).unwrap_or(9.0);
+        cv.caps(dx, y + 21.0, label, size, Some(MUTED), 1.5, false);
+        let f = num(28.0, Face::NumLight);
         match temp {
-            None => cv.text(dx, y + 26.0, "--°", f, FAINT),
-            Some(t) => cv.text(dx, y + 26.0, &format!("{:.0}°", deg(*t)), f, temp_color(*t)),
+            None => cv.text(dx, y + 35.0, "--°", f, FAINT),
+            Some(t) => cv.text(dx, y + 35.0, &format!("{:.0}°", deg(*t)), f, temp_color(*t)),
         }
     }
 }

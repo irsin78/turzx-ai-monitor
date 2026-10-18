@@ -65,6 +65,8 @@ pub struct Ai {
 pub struct Disks {
     /// drive letters of up to two drives, e.g. ["C", "D"]; empty = the first two internal drives
     pub show: Vec<String>,
+    /// names to show for them; empty = the drive model, shortened
+    pub labels: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -221,6 +223,8 @@ labels = [{labels}]
 # SSD temperatures next to the network speeds: drive letters of up to two drives,
 # e.g. ["C", "D"]; empty = the first two internal drives
 show = [{disks}]
+# Names for them, e.g. ["System", "Games"]; empty = the drive model ("990 PRO")
+labels = [{disk_labels}]
 "#,
         lang = c.language,
         clock = c.clock,
@@ -237,6 +241,7 @@ show = [{disks}]
         agy = c.ai.antigravity,
         labels = c.fans.labels.iter().map(|l| format!("{l:?}")).collect::<Vec<_>>().join(", "),
         disks = c.disks.show.iter().map(|l| format!("{l:?}")).collect::<Vec<_>>().join(", "),
+        disk_labels = c.disks.labels.iter().map(|l| format!("{l:?}")).collect::<Vec<_>>().join(", "),
     )
 }
 
