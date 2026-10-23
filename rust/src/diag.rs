@@ -39,7 +39,7 @@ pub fn fake_state() -> state::State {
     };
     st.ai.insert("Claude", u(12.0, 8000.0, 45.0, 300000.0, serde_json::json!({"rateLimitTier": "default_claude_max_20x"})));
     st.ai.insert("Codex", u(3.0, 17000.0, 37.0, 270000.0, serde_json::json!({"plan_type": "pro"})));
-    st.ai.insert("Antigravity", u(92.0, 3000.0, 0.1, 560000.0, serde_json::json!({"currentTier": "g1-pro-tier", "currentTierName": "Google AI Pro"})));
+    st.ai.insert("Antigravity", u(92.0, 3000.0, 0.1, 560000.0, serde_json::json!({"currentTier": "free-tier", "paidTier": "g1-pro-tier", "paidTierName": "Google AI Pro"})));
     st.hw = hw::Hardware {
         cpu: Some(12.0), cpu_cores: vec![0.0; 14], cpu_temp: Some(46.0), cpu_power: Some(38.0), ram_used: Some(14.1), ram_total: Some(64.0), ram_temp: Some(46.5),
         gpu: Some(4.0), gpu_temp: Some(37.0), gpu_power: Some(24.0), vram_used: Some(2.7), vram_total: Some(15.9), vram_temp: Some(48.0),

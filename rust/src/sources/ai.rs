@@ -46,8 +46,11 @@ fn plan_field<'a>(j: &'a Value, key: &str) -> Option<&'a str> {
 /// The plan name shown next to the service name ("Max 5x", "Pro", "Free"): `[plan_labels]` first,
 /// then a readable form of what the service reports.
 pub fn plan_label(name: &str, plan: &Value) -> Option<String> {
+    plan_label_with(name, plan, &crate::config::get().plan_labels)
+}
+
+fn plan_label_with(name: &str, plan: &Value, labels: &crate::config::PlanLabels) -> Option<String> {
     use crate::config::{readable_plan, PlanLabels};
-    let labels = &crate::config::get().plan_labels;
     match name {
         "Claude" => {
             let tier = plan_field(plan, "rateLimitTier");
@@ -66,7 +69,8 @@ pub fn plan_label(name: &str, plan: &Value) -> Option<String> {
         "Codex" => plan_field(plan, "plan_type").map(|raw| PlanLabels::lookup(&labels.codex, raw).map_or_else(|| readable_plan(raw), str::to_owned)),
         "Antigravity" => {
             let mut fallback = None;
-            for key in ["currentTier", "paidTier"] {
+            // the paid tier first: a Google AI Pro account reports currentTier "free-tier" for Antigravity
+            for key in ["paidTier", "currentTier"] {
                 let Some(id) = plan_field(plan, key) else { continue };
                 if let Some(l) = PlanLabels::lookup(&labels.antigravity, id) {
                     return Some(l.into());
@@ -674,6 +678,22 @@ impl Antigravity {
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    #[test]
+    fn plan_labels() {
+        let none = crate::config::PlanLabels::default();
+        let label = |name, plan| plan_label_with(name, &plan, &none);
+        assert_eq!(label("Claude", json!({"rateLimitTier": "default_claude_ai", "subscriptionType": "pro"})).as_deref(), Some("Pro"));
+        assert_eq!(label("Claude", json!({"rateLimitTier": "default_claude_max_5x", "subscriptionType": "max"})).as_deref(), Some("Max 5x"));
+        assert_eq!(label("Codex", json!({"plan_type": "plus"})).as_deref(), Some("Plus"));
+        let agy = json!({"currentTier": "free-tier", "currentTierName": "Antigravity", "paidTier": "g1-pro-tier", "paidTierName": "Google AI Pro"});
+        assert_eq!(label("Antigravity", agy).as_deref(), Some("Pro"));
+        assert_eq!(label("Antigravity", json!({"currentTier": "free-tier"})).as_deref(), Some("Free"));
+        assert_eq!(label("Codex", Value::Null), None);
+        let mut custom = crate::config::PlanLabels::default();
+        custom.codex.insert("pro".into(), "Pro 200".into());
+        assert_eq!(plan_label_with("Codex", &json!({"plan_type": "pro"}), &custom).as_deref(), Some("Pro 200"));
+    }
 
     #[test]
     fn parses_usage_panel_and_year_rollover() {
