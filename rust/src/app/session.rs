@@ -1,6 +1,7 @@
-//! Windows session events: shutdown / restart / logoff (standby screen) and the lock screen.
+//! Windows session events: shutdown / restart / logoff (standby screen), and when the panel
+//! should go black: lock screen, monitors switched off, screen saver.
 
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::OnceLock;
 use std::thread;
@@ -16,15 +17,29 @@ pub(super) type EndSession = Sender<()>;
 
 static END_SESSION: OnceLock<Sender<EndSession>> = OnceLock::new();
 
+/// The monitors are off (GUID_CONSOLE_DISPLAY_STATE; dimmed counts as on).
+static DISPLAY_OFF: AtomicBool = AtomicBool::new(false);
+
 /// Hidden top-level window that receives WM_ENDSESSION (a windowless process gets no notice).
 pub(super) fn watch_end_session() -> Receiver<EndSession> {
     use windows::core::w;
     use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::System::Power::{RegisterPowerSettingNotification, POWERBROADCAST_SETTING};
+    use windows::Win32::System::SystemServices::GUID_CONSOLE_DISPLAY_STATE;
     use windows::Win32::UI::WindowsAndMessaging::*;
 
     unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
         match msg {
+            WM_POWERBROADCAST if wp.0 == PBT_POWERSETTINGCHANGE as usize && lp.0 != 0 => {
+                let setting = unsafe { &*(lp.0 as *const POWERBROADCAST_SETTING) };
+                if setting.PowerSetting == GUID_CONSOLE_DISPLAY_STATE && setting.DataLength == 4 {
+                    // 0 off, 1 on, 2 dimmed
+                    let off = unsafe { std::ptr::read_unaligned(setting.Data.as_ptr().cast::<u32>()) } == 0;
+                    DISPLAY_OFF.store(off, Ordering::Relaxed);
+                }
+                LRESULT(1)
+            }
             WM_QUERYENDSESSION => LRESULT(1),
             WM_ENDSESSION if wp.0 != 0 => {
                 // the process may be killed once this returns: wait until the frame is sent
@@ -48,9 +63,16 @@ pub(super) fn watch_end_session() -> Receiver<EndSession> {
             let wc = WNDCLASSW { lpfnWndProc: Some(wndproc), hInstance: inst.into(), lpszClassName: class, ..Default::default() };
             RegisterClassW(&wc);
             // never shown; a message-only window would not get the broadcast
-            if let Err(e) = CreateWindowExW(WINDOW_EX_STYLE::default(), class, w!("TURZX dashboard"), WS_POPUP, 0, 0, 0, 0, None, None, Some(inst.into()), None) {
-                log::warn!("session window failed: {e}");
-                return;
+            let hwnd = match CreateWindowExW(WINDOW_EX_STYLE::default(), class, w!("TURZX dashboard"), WS_POPUP, 0, 0, 0, 0, None, None, Some(inst.into()), None) {
+                Ok(h) => h,
+                Err(e) => {
+                    log::warn!("session window failed: {e}");
+                    return;
+                }
+            };
+            // the current state arrives right after registering
+            if let Err(e) = RegisterPowerSettingNotification(hwnd.into(), &GUID_CONSOLE_DISPLAY_STATE, DEVICE_NOTIFY_WINDOW_HANDLE) {
+                log::warn!("display power notification failed: {e}");
             }
             let mut msg = MSG::default();
             while GetMessageW(&mut msg, None, 0, 0).as_bool() {
@@ -102,9 +124,32 @@ pub(super) fn end_session(panel: Option<&mut lcd::Lcd>, ack: EndSession) -> ! {
     }
 }
 
+/// Why the panel should be black right now, if it should: the PC is locked, the monitors are
+/// off, or the screen saver runs.
+pub fn blank_reason() -> Option<&'static str> {
+    if session_locked() {
+        Some("locked")
+    } else if DISPLAY_OFF.load(Ordering::Relaxed) {
+        Some("monitors off")
+    } else if screen_saver_running() {
+        Some("screen saver")
+    } else {
+        None
+    }
+}
+
+fn screen_saver_running() -> bool {
+    use windows::core::BOOL;
+    use windows::Win32::UI::WindowsAndMessaging::{SystemParametersInfoW, SPI_GETSCREENSAVERRUNNING, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS};
+    let mut running = BOOL::default();
+    unsafe {
+        SystemParametersInfoW(SPI_GETSCREENSAVERRUNNING, 0, Some((&mut running as *mut BOOL).cast()), SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0)).is_ok()
+            && running.as_bool()
+    }
+}
 
 /// True while this Windows session shows the lock screen.
-pub fn session_locked() -> bool {
+fn session_locked() -> bool {
     use windows::Win32::System::RemoteDesktop::*;
     unsafe {
         let mut buf = windows::core::PWSTR::null();

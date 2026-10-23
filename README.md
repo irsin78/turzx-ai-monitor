@@ -19,8 +19,8 @@ When Windows shuts down, the panel switches to a standby screen and keeps it unt
 
 ## Features
 
-- **AI plan usage**: what is left of the 5-hour and weekly limits, with the time until each resets.
-  Refreshes right after a reset.
+- **AI plan usage**: what is left of the 5-hour and weekly limits, with the time until each resets,
+  and the plan name (Pro, Max 5x, ...). Refreshes right after a reset.
 - **Hardware**: CPU (with per-core graphs), memory, GPU and VRAM usage with history graphs,
   temperatures, CPU package and GPU board power, two board fans and the GPU fan, network up/down,
   and the temperature of two disks.
@@ -28,9 +28,12 @@ When Windows shuts down, the panel switches to a standby screen and keeps it unt
 - **Weather** for your city: now, tomorrow, sunrise/sunset, PM2.5/PM10 with Korean or US AQI grades.
 - **16 languages**: English, 한국어, 日本語, 简体中文, 繁體中文, Español, Français, Deutsch,
   Italiano, Português, Русский, Polski, Türkçe, Nederlands, Tiếng Việt, Bahasa Indonesia.
-- **Light on the PC**: one process, ~65 MB, ~5% of one core in Windows efficiency mode.
+- **Smooth and light**: a steady 12 fps for the animations, also under full CPU load; ~70 MB and a
+  few percent of one core.
 - **Robust**: reconnects within a second when the USB cable is knocked, restarts itself if a
-  driver crashes it, black screen while the PC is locked.
+  driver crashes it.
+- **Black panel** while the PC is locked, the monitors are off or the screen saver runs.
+- **Mounted upside down?** `rotation = 180` turns the picture around.
 
 ## Requirements
 
@@ -59,7 +62,7 @@ From a terminal:
 turzx-dashboard install [--no-autostart]
 turzx-dashboard uninstall [--purge]     # --purge also removes settings, logs and caches
 turzx-dashboard autostart on|off
-turzx-dashboard settings                # open the settings file
+turzx-dashboard settings                # open the settings window
 turzx-dashboard run                     # run without installing
 ```
 
@@ -67,13 +70,15 @@ Uninstall from *Settings → Apps → TURZX AI Monitor* or with `turzx-dashboard
 
 ## Settings
 
-`%APPDATA%\TurzxDashboard\config.toml` (Start menu: *TURZX AI Monitor settings*). Save it and the
-dashboard restarts with the new settings.
+Start menu → *TURZX AI Monitor settings* opens a small window for the common settings. Everything
+else is in `%APPDATA%\TurzxDashboard\config.toml` (*Edit file…* in that window). Save either and
+the dashboard restarts with the new settings.
 
 ```toml
 language = "auto"        # auto = Windows display language; en, ko, ja, zh-CN, zh-TW, es, fr, de, it, pt, ru, pl, tr, nl, vi, id
 clock = "12h"            # or "24h"
 temperature = "C"        # or "F"
+rotation = 0             # 180 when the panel is mounted upside down
 
 [location]
 city = "Seoul"           # looked up by name; or set latitude / longitude
@@ -90,6 +95,10 @@ scale = "auto"           # "kr" (Korean grades), "us" (US AQI); auto = kr in Kor
 claude = true
 codex = true
 antigravity = true
+
+[plan_labels]            # names shown next to the AI names, by the value the service reports
+# codex.pro = "Pro 200"
+# claude.default_claude_max_5x = "Max 5x"
 
 [fans]
 labels = []              # e.g. ["Radiator", "Pump", "GPU"]

@@ -27,6 +27,63 @@ pub struct Usage {
     pub weekly_reset: Option<f64>,
     #[serde(default)]
     pub source: String,
+    /// Non-secret plan fields as the service reports them (`plan_label` turns them into a name)
+    #[serde(default)]
+    pub plan: Value,
+}
+
+/// Claude's plan from its login file: only the two plan fields are kept, never the tokens.
+fn claude_plan() -> Value {
+    let creds: Value = std::fs::read(home().join(r".claude\.credentials.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    let o = &creds["claudeAiOauth"];
+    json!({"rateLimitTier": plan_field(o, "rateLimitTier"), "subscriptionType": plan_field(o, "subscriptionType")})
+}
+
+fn plan_field<'a>(j: &'a Value, key: &str) -> Option<&'a str> {
+    j[key].as_str().map(str::trim).filter(|s| !s.is_empty())
+}
+
+/// The plan name shown next to the service name ("Max 5x", "Pro", "Free"): `[plan_labels]` first,
+/// then a readable form of what the service reports.
+pub fn plan_label(name: &str, plan: &Value) -> Option<String> {
+    use crate::config::{readable_plan, PlanLabels};
+    let labels = &crate::config::get().plan_labels;
+    match name {
+        "Claude" => {
+            let tier = plan_field(plan, "rateLimitTier");
+            let subscription = plan_field(plan, "subscriptionType");
+            for raw in [tier, subscription].into_iter().flatten() {
+                if let Some(l) = PlanLabels::lookup(&labels.claude, raw) {
+                    return Some(l.into());
+                }
+            }
+            match tier {
+                Some(t) if t.contains("max_20x") => Some("Max 20x".into()),
+                Some(t) if t.contains("max_5x") => Some("Max 5x".into()),
+                _ => subscription.or(tier).map(readable_plan),
+            }
+        }
+        "Codex" => plan_field(plan, "plan_type").map(|raw| PlanLabels::lookup(&labels.codex, raw).map_or_else(|| readable_plan(raw), str::to_owned)),
+        "Antigravity" => {
+            let mut fallback = None;
+            for key in ["currentTier", "paidTier"] {
+                let Some(id) = plan_field(plan, key) else { continue };
+                if let Some(l) = PlanLabels::lookup(&labels.antigravity, id) {
+                    return Some(l.into());
+                }
+                if id == "free-tier" {
+                    return Some("Free".into());
+                }
+                let tier_name = plan_field(plan, &format!("{key}Name")).map(|n| ["Antigravity ", "Google AI ", "Gemini "].iter().fold(n, |n, p| n.strip_prefix(p).unwrap_or(n)).trim());
+                if let Some(n) = tier_name.filter(|n| !n.is_empty() && *n != "Antigravity") {
+                    return Some(n.into());
+                }
+                fallback.get_or_insert_with(|| readable_plan(id));
+            }
+            fallback
+        }
+        _ => None,
+    }
 }
 
 /// The usage API asked us to wait (HTTP 429 + Retry-After).
@@ -258,6 +315,7 @@ impl Claude {
             weekly: week["utilization"].as_f64(),
             weekly_reset: iso(&week["resets_at"]),
             source: "api".into(),
+            plan: claude_plan(),
         })
     }
 }
@@ -275,7 +333,7 @@ pub fn parse_usage_screen(text: &str, now_utc: chrono::DateTime<chrono::Utc>) ->
     };
     let (session, session_reset) = section("Current session");
     let (weekly, weekly_reset) = section("Current week (all models)");
-    Usage { session, session_reset, weekly, weekly_reset, source: "cli".into() }
+    Usage { session, session_reset, weekly, weekly_reset, source: "cli".into(), plan: Value::Null }
 }
 
 /// "2:39am" (next occurrence) or "Oct 7, 12:59am" (this year, else next) -> epoch seconds.
@@ -394,10 +452,11 @@ impl ClaudeCli {
                 bail!("no plan usage on /usage screen");
             }
             std::thread::sleep(Duration::from_millis(500)); // let the last line render
-            let u = parse_usage_screen(&text(), chrono::Utc::now());
+            let mut u = parse_usage_screen(&text(), chrono::Utc::now());
             if u.session.is_none() && u.weekly.is_none() {
                 bail!("could not parse /usage screen");
             }
+            u.plan = claude_plan();
             Ok(u)
         })();
         if result.is_err() {
@@ -435,6 +494,7 @@ pub fn codex() -> Result<Usage> {
         weekly: s["used_percent"].as_f64(),
         weekly_reset: s["reset_at"].as_f64(),
         source: "api".into(),
+        plan: json!({"plan_type": plan_field(&r.body, "plan_type")}),
     })
 }
 
@@ -445,13 +505,15 @@ pub fn codex() -> Result<Usage> {
 pub struct Antigravity {
     token: Option<(String, f64)>,
     project: Option<String>,
+    /// tier ids and names from loadCodeAssist
+    plan: Value,
 }
 
 impl Antigravity {
     const BASE: &'static str = "https://cloudcode-pa.googleapis.com/v1internal:";
 
     pub fn new() -> Self {
-        Antigravity { token: None, project: None }
+        Antigravity { token: None, project: None, plan: Value::Null }
     }
 
     fn stored() -> Result<Value> {
@@ -580,10 +642,16 @@ impl Antigravity {
         if self.project.is_none() {
             let j = self.post(&token, "loadCodeAssist", json!({"metadata": {"ideType": "ANTIGRAVITY"}}))?;
             self.project = Some(j["cloudaicompanionProject"].as_str().context("no project")?.to_string());
+            self.plan = json!({
+                "currentTier": plan_field(&j["currentTier"], "id"),
+                "currentTierName": plan_field(&j["currentTier"], "name"),
+                "paidTier": plan_field(&j["paidTier"], "id"),
+                "paidTierName": plan_field(&j["paidTier"], "name"),
+            });
         }
         let j = self.post(&token, "retrieveUserQuotaSummary", json!({"project": self.project}))?;
         // Two groups (Gemini, Claude/GPT) with separate limits: show the most used one per window
-        let mut u = Usage { source: "api".into(), ..Default::default() };
+        let mut u = Usage { source: "api".into(), plan: self.plan.clone(), ..Default::default() };
         for g in j["groups"].as_array().into_iter().flatten() {
             for b in g["buckets"].as_array().into_iter().flatten() {
                 let pct = (1.0 - b["remainingFraction"].as_f64().unwrap_or(1.0).clamp(0.0, 1.0)) * 100.0;

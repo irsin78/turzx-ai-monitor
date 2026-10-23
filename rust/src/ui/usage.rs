@@ -42,8 +42,16 @@ pub(super) fn draw_ai(cv: &mut Canvas, st: &State, x: f32, top: f32) {
         let y = top + 34.0 + i as f32 * AI_ROW;
         let color = ai_color(name);
         cv.rect(x, y + 10.0, x + 4.0, y + 30.0, color); // brand tick
-        cv.text(x + 16.0, y + 5.0, name, num(24.0, Face::NumSemi), INK);
+        let f_name = num(24.0, Face::NumSemi);
+        cv.text(x + 16.0, y + 5.0, name, f_name, INK);
         let u = st.ai.get(name);
+        // plan name after the service name, smaller until it fits before the first column
+        if let Some(plan) = u.and_then(|u| crate::sources::ai::plan_label(name, &u.plan)) {
+            let px = x + 16.0 + cv.text_len(name, f_name) + 8.0;
+            if let Some(f) = [14.0, 13.0, 12.0, 11.0].map(|s| num(s, Face::NumSemi)).into_iter().find(|&f| px + cv.text_len(&plan, f) <= c1 - 10.0) {
+                cv.text(px, y + 15.0, &plan, f, MUTED);
+            }
+        }
         let err = st.ai_err.get(name);
         if let (Some(e), None) = (err, u) {
             cv.text(c1, y + 8.0, &err_text(e), ko(18.0, false), WARN);

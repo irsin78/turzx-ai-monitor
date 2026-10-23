@@ -16,6 +16,7 @@ mod mascot {
 mod mascot;
 mod panel;
 mod sensors;
+mod settings;
 mod sources;
 mod state;
 mod ui;
@@ -49,7 +50,7 @@ fn main() -> Result<()> {
         Some("install") => return done(install::install(!arg("--no-autostart"))),
         Some("uninstall") => return done(install::uninstall(arg("--purge"))),
         Some("autostart") => return done(install::autostart(args.get(1).map(String::as_str) != Some("off"))),
-        Some("settings") => return done(install::settings()),
+        Some("settings") => return done(settings::open()),
         Some("--help" | "-h" | "help") => {
             install::tell(USAGE, false);
             return Ok(());
@@ -94,6 +95,6 @@ const USAGE: &str = "turzx-dashboard [command]
   install [--no-autostart]
   uninstall [--purge]     --purge also removes settings, logs and caches
   autostart on|off
-  settings                open the settings file
+  settings                open the settings window
   diag <command>          previews and diagnostics (diag help)
 ";

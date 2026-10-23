@@ -19,13 +19,44 @@ pub struct Config {
     pub clock: String,
     /// "C" or "F"
     pub temperature: String,
+    /// 0 or 180: turn everything on the panel upside down (panel mounted the other way)
+    pub rotation: u16,
     pub location: Location,
     pub holidays: Holidays,
     pub air_quality: AirQuality,
     pub ai: Ai,
+    pub plan_labels: PlanLabels,
     pub fans: Fans,
     pub disks: Disks,
     pub debug: Debug,
+}
+
+/// Names shown next to the AI names, keyed by the plan value the service reports; values that
+/// are not listed get a readable form of the raw value ("max_5x" -> "Max 5x").
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct PlanLabels {
+    pub claude: std::collections::HashMap<String, String>,
+    pub codex: std::collections::HashMap<String, String>,
+    pub antigravity: std::collections::HashMap<String, String>,
+}
+
+impl PlanLabels {
+    pub fn lookup<'a>(labels: &'a std::collections::HashMap<String, String>, raw: &str) -> Option<&'a str> {
+        labels.get(raw).map(|s| s.trim()).filter(|s| !s.is_empty())
+    }
+}
+
+/// "max_5x" / "free-tier" -> "Max 5x" / "Free Tier".
+pub fn readable_plan(raw: &str) -> String {
+    raw.split(['_', '-'])
+        .flat_map(str::split_whitespace)
+        .map(|word| {
+            let mut chars = word.chars();
+            chars.next().map(|c| c.to_uppercase().collect::<String>() + chars.as_str()).unwrap_or_default()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Diagnostics (not in the written template).
@@ -91,10 +122,12 @@ impl Default for Config {
             language: "auto".into(),
             clock: "12h".into(),
             temperature: "C".into(),
+            rotation: 0,
             location: Location::default(),
             holidays: Holidays { country: "auto".into() },
             air_quality: AirQuality { scale: "auto".into() },
             ai: Ai { claude: true, codex: true, antigravity: true },
+            plan_labels: PlanLabels::default(),
             fans: Fans { labels: Vec::new() },
             disks: Disks::default(),
             debug: Debug::default(),
@@ -188,7 +221,7 @@ pub fn path() -> PathBuf {
 }
 
 /// The settings file written on the first run: every key, with what it does.
-fn template(c: &Config) -> String {
+pub fn template(c: &Config) -> String {
     let opt = |v: Option<f64>| v.map_or("# not set: looked up from city".to_string(), |v| v.to_string());
     format!(
         r#"# TURZX AI monitor settings. Save the file and the dashboard restarts with them.
@@ -202,6 +235,9 @@ clock = "{clock}"
 
 # Temperature unit: "C" or "F"
 temperature = "{temp}"
+
+# Panel rotation: 0, or 180 when the panel is mounted upside down
+rotation = {rotation}
 
 [location]
 # Weather and air quality for this city (looked up by name), or set latitude/longitude
@@ -224,6 +260,13 @@ claude = {claude}
 codex = {codex}
 antigravity = {agy}
 
+[plan_labels]
+# Name next to each AI service, by the plan value it reports (claude: rateLimitTier, then
+# subscriptionType; codex: plan_type; antigravity: tier id). Unlisted values are shown in a
+# readable form; the services do not report prices.
+# codex.pro = "Pro 200"
+# claude.default_claude_max_5x = "Max 5x"
+
 [fans]
 # Names for the two board fan channels and the GPU fan, e.g. ["Radiator", "Pump", "GPU"];
 # empty = default names in the chosen language
@@ -239,6 +282,7 @@ labels = [{disk_labels}]
         lang = c.language,
         clock = c.clock,
         temp = c.temperature,
+        rotation = c.rotation,
         city = c.location.city,
         lat_key = if c.location.latitude.is_some() { "latitude" } else { "# latitude" },
         lon_key = if c.location.longitude.is_some() { "longitude" } else { "# longitude" },

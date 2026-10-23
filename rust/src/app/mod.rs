@@ -7,7 +7,6 @@ mod perf;
 mod session;
 pub mod supervisor;
 
-pub use session::session_locked;
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -63,8 +62,8 @@ pub fn run(ai_enabled: bool) -> ! {
     let mut panel: Option<lcd::Lcd> = None;
     let mut lost: Option<(Instant, String)> = None; // when the panel went away and the last reason
     let mut attempts = 0u32;
-    let mut was_locked = false;
-    let mut lock_checked: Option<Instant> = None;
+    let mut blank = false; // locked, monitors off or screen saver: black panel
+    let mut blank_checked: Option<Instant> = None;
     // Frames: the dashboard is redrawn once a second into `base` and encoded whole. In between,
     // only the mascot band is restored from `base`, the mascots drawn on top and the JPEG bands
     // under it re-encoded; the rest of the frame reuses the last encoded bytes.
@@ -132,18 +131,21 @@ pub fn run(ai_enabled: bool) -> ! {
         }
         let delay = match panel.as_mut() {
             Some(p) => {
-                // PC locked: black screen until unlocked (checked once a second)
-                if lock_checked.is_none_or(|c| c.elapsed() >= Duration::from_secs(1)) {
-                    lock_checked = Some(t);
-                    let locked = session_locked();
-                    if locked != was_locked {
-                        log::info!("session {}", if locked { "locked: screen off" } else { "unlocked: screen on" });
-                        was_locked = locked;
+                // PC locked, monitors off or screen saver: black screen until it ends (checked once a second)
+                if blank_checked.is_none_or(|c| c.elapsed() >= Duration::from_secs(1)) {
+                    blank_checked = Some(t);
+                    let reason = session::blank_reason();
+                    if reason.is_some() != blank {
+                        match reason {
+                            Some(r) => log::info!("{r}: screen off"),
+                            None => log::info!("screen on"),
+                        }
+                        blank = reason.is_some();
                     }
                 }
                 let dt = last_tick.elapsed().as_secs_f32();
                 last_tick = t;
-                let sent = if was_locked {
+                let sent = if blank {
                     drawn_at = None;
                     let frame = black.get_or_insert_with(|| {
                         let mut e = jpeg::RowJpeg::new();
@@ -176,7 +178,7 @@ pub fn run(ai_enabled: bool) -> ! {
                     r
                 };
                 match sent {
-                    Ok(_) if was_locked => Duration::from_secs(1),
+                    Ok(_) if blank => Duration::from_secs(1),
                     Ok(_) => {
                         // next free slot on the grid; slots already past are dropped, not queued
                         let now = Instant::now();
@@ -195,12 +197,12 @@ pub fn run(ai_enabled: bool) -> ! {
             }
             None => backoff(attempts.saturating_sub(1)),
         };
-        if panel.is_none() || was_locked {
+        if panel.is_none() || blank {
             next_tick = t + delay; // off the grid: start a new one when frames resume
         }
-        perf.active(perf_on && panel.is_some() && !was_locked);
+        perf.active(perf_on && panel.is_some() && !blank);
         perf.report();
-        if perf_on && panel.is_some() && !was_locked {
+        if perf_on && panel.is_some() && !blank {
             intended = Some(next_tick);
         }
         if let Some(ack) = wait(&ending, delay.saturating_sub(t.elapsed())) {

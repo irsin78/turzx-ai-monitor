@@ -335,10 +335,3 @@ pub fn autostart(on: bool) -> Result<String> {
     let exe = if installed_exe().is_file() { installed_exe() } else { std::env::current_exe()? };
     Ok(format!("Autostart: {}", set_autostart(on, &exe)?))
 }
-
-/// Open the settings file in Notepad (creating it with the defaults first).
-pub fn settings() -> Result<String> {
-    let _ = config::get();
-    Command::new("notepad.exe").arg(config::path()).spawn()?;
-    Ok(String::new())
-}

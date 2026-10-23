@@ -14,16 +14,18 @@ Windows가 종료되면 패널에 대기 화면을 띄우고, 다음에 켤 때�
 
 ## 기능
 
-- **AI 사용량**: 5시간 한도와 주간 한도의 남은 양과 초기화까지 남은 시간. 초기화되면 바로 다시 조회합니다.
+- **AI 사용량**: 5시간 한도와 주간 한도의 남은 양, 초기화까지 남은 시간, 요금제 이름(Pro, Max 5x 등).
+  초기화되면 바로 다시 조회합니다.
 - **하드웨어**: CPU(코어별 그래프 포함), 메모리, GPU, VRAM 사용률과 기록 그래프, 온도, CPU 패키지·GPU
   보드 전력, 메인보드 팬 2개와 GPU 팬, 네트워크 업·다운로드 속도, 디스크 2개 온도
 - **시계와 달력**(12/24시간) — 사는 나라의 공휴일 표시
 - **날씨**: 지금, 내일, 일출·일몰, 초미세·미세먼지(한국 환경부 등급 또는 미국 AQI)
 - **16개 언어**: English, 한국어, 日本語, 简体中文, 繁體中文, Español, Français, Deutsch, Italiano,
   Português, Русский, Polski, Türkçe, Nederlands, Tiếng Việt, Bahasa Indonesia
-- **가벼움**: 메모리 약 65MB, Windows 효율 모드에서 코어 1개 기준 약 5%
-- **튼튼함**: USB 선을 건드려 끊겨도 1초 안팎으로 다시 연결, 드라이버 문제로 죽어도 스스로 재시작,
-  PC를 잠그면 화면 끄기(검은 화면)
+- **부드럽고 가벼움**: CPU를 꽉 채워 써도 애니메이션 12fps 유지, 메모리 약 70MB, 코어 1개 기준 몇 %
+- **튼튼함**: USB 선을 건드려 끊겨도 1초 안팎으로 다시 연결, 드라이버 문제로 죽어도 스스로 재시작
+- **화면 끄기**: PC 잠금, 모니터 꺼짐, 화면 보호기 동안 패널을 검게
+- **거꾸로 달았다면** `rotation = 180`으로 화면을 뒤집습니다
 
 ## 필요 사항
 
@@ -49,7 +51,7 @@ Windows가 종료되면 패널에 대기 화면을 띄우고, 다음에 켤 때�
 turzx-dashboard install [--no-autostart]
 turzx-dashboard uninstall [--purge]     # --purge: 설정·로그·캐시까지 삭제
 turzx-dashboard autostart on|off
-turzx-dashboard settings                # 설정 파일 열기
+turzx-dashboard settings                # 설정 창 열기
 turzx-dashboard run                     # 설치 없이 실행
 ```
 
@@ -57,9 +59,11 @@ turzx-dashboard run                     # 설치 없이 실행
 
 ## 설정
 
-`%APPDATA%\TurzxDashboard\config.toml` (시작 메뉴: *TURZX AI Monitor settings*). 저장하면 대시보드가
+시작 메뉴 → *TURZX AI Monitor settings*로 자주 쓰는 설정 창이 열립니다. 나머지는
+`%APPDATA%\TurzxDashboard\config.toml`에 있습니다(설정 창의 *파일 편집…*). 어느 쪽이든 저장하면 대시보드가
 새 설정으로 다시 시작합니다. 항목은 [영어 README](README.md#settings)와 같습니다: 언어, 12/24시간,
-섭씨/화씨, 도시(또는 위도·경도), 공휴일 나라, 미세먼지 기준, 켤 AI 서비스, 팬 이름, 온도를 볼 디스크.
+섭씨/화씨, 패널 회전, 도시(또는 위도·경도), 공휴일 나라, 미세먼지 기준, 켤 AI 서비스, 요금제 표시 이름,
+팬 이름, 온도를 볼 디스크.
 
 ## AI 사용량을 읽는 방식
 

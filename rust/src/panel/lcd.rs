@@ -150,9 +150,19 @@ impl Lcd {
     /// Show a landscape 1920x480 RGB image (row-major, 3 bytes/px).
     ///
     /// With the monitor lying landscape the panel shows the portrait framebuffer rotated
-    /// 90 degrees CCW, so the image is pre-rotated 90 degrees CW.
+    /// 90 degrees CCW, so the image is pre-rotated 90 degrees CW (CCW with `rotation = 180`).
     pub fn show_landscape(&mut self, rgb: &[u8]) -> Result<()> {
-        let jpeg = encode_jpeg(&rotate_cw(rgb, HEIGHT, WIDTH), WIDTH, HEIGHT)?;
+        let mut portrait = rotate_cw(rgb, HEIGHT, WIDTH);
+        if crate::config::get().rotation == 180 {
+            // CW then 180 = CCW: reverse the pixel order
+            let n = portrait.len() / 3;
+            for i in 0..n / 2 {
+                for c in 0..3 {
+                    portrait.swap(i * 3 + c, (n - 1 - i) * 3 + c);
+                }
+            }
+        }
+        let jpeg = encode_jpeg(&portrait, WIDTH, HEIGHT)?;
         self.send_jpeg(&jpeg)?;
         Ok(())
     }

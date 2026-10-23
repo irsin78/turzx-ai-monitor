@@ -6,7 +6,8 @@
 //! can be reused as they are and only the dirty bands are encoded again.
 //!
 //! Fixed for this panel: 480x1920 portrait (the landscape canvas rotated 90 degrees clockwise,
-//! read straight from the canvas, no intermediate buffers), YCbCr 4:4:4 (4:2:0 smears colored
+//! read straight from the canvas, no intermediate buffers; or 270 degrees for a panel mounted
+//! upside down, `rotation = 180`), YCbCr 4:4:4 (4:2:0 smears colored
 //! text), quality 95, standard Huffman tables (ITU T.81 Annex K).
 
 use std::ops::Range;
@@ -170,6 +171,7 @@ fn category(v: i32) -> (u32, u32) {
 }
 
 pub struct RowJpeg {
+    flip: bool,
     header: Vec<u8>,
     bands: Vec<Vec<u8>>, // entropy-coded bytes per band, padded and stuffed
     hashes: Vec<u64>,     // pixels each band was encoded from; unchanged bands are skipped
@@ -180,7 +182,13 @@ pub struct RowJpeg {
 }
 
 impl RowJpeg {
+    /// Encoder for the rotation in the settings.
     pub fn new() -> Self {
+        Self::with_rotation(crate::config::get().rotation == 180)
+    }
+
+    /// `flip`: turn the picture 180 degrees (panel mounted upside down).
+    pub fn with_rotation(flip: bool) -> Self {
         let (ql, qc) = (quant(&LUMA_Q), quant(&CHROMA_Q));
         let mut h = vec![0xFF, 0xD8]; // SOI
         let mut seg = |marker: u8, body: &[u8]| {
@@ -213,6 +221,7 @@ impl RowJpeg {
         seg(0xDD, &(MCUS as u16).to_be_bytes()); // restart every band
         seg(0xDA, &[3, 1, 0x00, 2, 0x11, 3, 0x11, 0, 63, 0]);
         RowJpeg {
+            flip,
             header: h,
             bands: vec![Vec::new(); BANDS],
             hashes: vec![0; BANDS],
@@ -251,8 +260,10 @@ impl RowJpeg {
         let lh = pm.height() as usize;
         debug_assert!(lw == HEIGHT && lh == WIDTH);
         let mut blocks = [[0f32; 64]; 3];
-        for b in bands.start.min(BANDS)..bands.end.min(BANDS) {
-            let h = band_hash(px, lw, b);
+        // `bands` are landscape column groups; flipped, group lb is portrait band BANDS - 1 - lb
+        for lb in bands.start.min(BANDS)..bands.end.min(BANDS) {
+            let b = if self.flip { BANDS - 1 - lb } else { lb };
+            let h = band_hash(px, lw, lb);
             if h == self.hashes[b] && !self.bands[b].is_empty() {
                 continue; // same pixels as last time: keep the bytes
             }
@@ -262,11 +273,11 @@ impl RowJpeg {
             let mut bits = Bits { out: &mut out, acc: 0, n: 0 };
             let mut pred = [0i32; 3];
             for m in 0..MCUS {
-                // portrait pixel (x, y) = landscape (y, lh - 1 - x)
+                // portrait pixel (x, y) = landscape (y, lh - 1 - x); flipped: (lw - 1 - y, x)
                 for yy in 0..8 {
-                    let lx = b * 8 + yy;
+                    let lx = lb * 8 + if self.flip { 7 - yy } else { yy };
                     for xx in 0..8 {
-                        let ly = lh - 1 - (m * 8 + xx);
+                        let ly = if self.flip { m * 8 + xx } else { lh - 1 - (m * 8 + xx) };
                         let i = (ly * lw + lx) * 4;
                         let (r, g, bl) = (px[i] as f32, px[i + 1] as f32, px[i + 2] as f32);
                         let k = yy * 8 + xx;
@@ -350,4 +361,45 @@ pub fn bands_for(x0: f32, x1: f32) -> Range<usize> {
     let a = (x0.max(0.0) as usize) / 8;
     let b = ((x1.max(0.0) as usize) + 7) / 8;
     a.min(BANDS)..b.min(BANDS)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Encoding flipped must equal encoding the picture turned 180 degrees, also band by band.
+    #[test]
+    fn flip_is_180_degrees() {
+        let (w, h) = (HEIGHT as u32, WIDTH as u32);
+        let mut pm = Pixmap::new(w, h).unwrap();
+        for (i, p) in pm.data_mut().chunks_exact_mut(4).enumerate() {
+            let (x, y) = (i % w as usize, i / w as usize);
+            p.copy_from_slice(&[(x * 7 % 256) as u8, (y * 3 % 256) as u8, ((x ^ y) % 256) as u8, 255]);
+        }
+        let mut turned = Pixmap::new(w, h).unwrap();
+        let src = pm.data().to_vec();
+        let n = src.len() / 4;
+        for (i, p) in turned.data_mut().chunks_exact_mut(4).enumerate() {
+            p.copy_from_slice(&src[(n - 1 - i) * 4..][..4]);
+        }
+        let mut a = RowJpeg::with_rotation(true);
+        let mut b = RowJpeg::with_rotation(false);
+        a.encode(&pm, 0..BANDS);
+        b.encode(&turned, 0..BANDS);
+        assert!(a.frame() == b.frame());
+        // change landscape columns 16..24 (band 2): only portrait band BANDS - 3 may change
+        for row in pm.data_mut().chunks_exact_mut(w as usize * 4) {
+            row[16 * 4..24 * 4].fill(0);
+        }
+        for row in turned.data_mut().chunks_exact_mut(w as usize * 4) {
+            let l = row.len();
+            row[l - 24 * 4..l - 16 * 4].fill(0);
+        }
+        for p in pm.data_mut().chunks_exact_mut(4).chain(turned.data_mut().chunks_exact_mut(4)) {
+            p[3] = 255;
+        }
+        a.encode(&pm, bands_for(16.0, 24.0));
+        b.encode(&turned, bands_for((HEIGHT - 24) as f32, (HEIGHT - 16) as f32));
+        assert!(a.frame() == b.frame());
+    }
 }
