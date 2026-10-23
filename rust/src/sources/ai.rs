@@ -472,6 +472,14 @@ impl Antigravity {
     /// (client_id, client_secret) pairs embedded in the installed Antigravity binaries;
     /// secrets are exactly 35 chars (as Claude-Code-Usage-Monitor extracts them).
     fn oauth_clients() -> Vec<(String, String)> {
+        static FOUND: std::sync::OnceLock<Vec<(String, String)>> = std::sync::OnceLock::new();
+        FOUND.get_or_init(Self::scan_clients).clone()
+    }
+
+    /// Scan the binaries in 64 KiB windows (they are ~200 MB; reading one whole made the
+    /// working set jump by that much).
+    fn scan_clients() -> Vec<(String, String)> {
+        use std::io::Read;
         let la = local_appdata();
         let pf = PathBuf::from(std::env::var("ProgramFiles").unwrap_or_default());
         let id_re = BytesRegex::new(r"[0-9]{10,}-[0-9A-Za-z_-]{20,80}\.apps\.googleusercontent\.com").unwrap();
@@ -481,18 +489,30 @@ impl Antigravity {
             la.join(r"agy\bin\agy.exe"),
             pf.join(r"Antigravity\resources\bin\language_server.exe"),
         ] {
-            let Ok(b) = std::fs::read(path) else { continue };
-            let uniq = |re: &BytesRegex| {
-                let mut v: Vec<String> = Vec::new();
-                for m in re.find_iter(&b) {
-                    let s = String::from_utf8_lossy(m.as_bytes()).to_string();
-                    if !v.contains(&s) {
-                        v.push(s);
+            let Ok(mut file) = std::fs::File::open(path) else { continue };
+            const WINDOW: usize = 64 * 1024;
+            const OVERLAP: usize = 256; // longer than any match, so none is cut in two
+            let mut buf = vec![0u8; WINDOW + OVERLAP];
+            let (mut ids, mut secrets): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
+            let mut kept = 0; // bytes carried over from the previous window
+            loop {
+                let n = match file.read(&mut buf[kept..]) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => n,
+                };
+                let data = &buf[..kept + n];
+                for (re, out) in [(&id_re, &mut ids), (&sec_re, &mut secrets)] {
+                    for m in re.find_iter(data) {
+                        let s = String::from_utf8_lossy(m.as_bytes()).to_string();
+                        if !out.contains(&s) {
+                            out.push(s);
+                        }
                     }
                 }
-                v
-            };
-            let (ids, secrets) = (uniq(&id_re), uniq(&sec_re));
+                kept = OVERLAP.min(data.len());
+                let len = data.len();
+                buf.copy_within(len - kept..len, 0);
+            }
             let pairs: Vec<_> = ids.iter().flat_map(|i| secrets.iter().map(move |s| (i.clone(), s.clone()))).collect();
             if !pairs.is_empty() {
                 return pairs;

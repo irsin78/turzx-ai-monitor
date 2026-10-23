@@ -30,6 +30,8 @@ pub struct Lcd {
     t0: Instant,
     _iface: Interface,
     pub firmware: String,
+    /// USB link speed: frames take ~16 ms at high speed, ~240 ms at full speed
+    pub speed: String,
     tx: Vec<u8>, // reused for every frame
 }
 
@@ -53,11 +55,12 @@ impl Lcd {
             .wait()?
             .find(|d| d.vendor_id() == VID && d.product_id() == PID)
             .ok_or(NotFound)?;
+        let speed = info.speed().map_or("unknown".to_string(), |s| format!("{s:?}"));
         let device = info.open().wait().context("open TURZX device")?;
         let iface = device.claim_interface(0).wait().context("claim interface 0")?;
         let out = iface.endpoint::<Bulk, Out>(0x01)?;
         let inp = iface.endpoint::<Bulk, In>(0x81)?;
-        let mut lcd = Lcd { out, inp, t0: Instant::now(), _iface: iface, firmware: String::new(), tx: Vec::with_capacity(256 * 1024) };
+        let mut lcd = Lcd { out, inp, t0: Instant::now(), _iface: iface, firmware: String::new(), speed, tx: Vec::with_capacity(256 * 1024) };
         lcd.drain();
         lcd.firmware = match lcd.version() {
             Ok(v) => v,

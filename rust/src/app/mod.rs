@@ -2,6 +2,8 @@
 //! sends frames to the panel, and the session watcher shows the standby screen at shutdown.
 
 mod collectors;
+mod mmcss;
+mod perf;
 mod session;
 pub mod supervisor;
 
@@ -24,6 +26,26 @@ type Shared = Arc<Mutex<State>>;
 const FRAME: Duration = if crate::mascot::ENABLED { Duration::from_millis(83) } else { Duration::from_secs(1) };
 /// How far a mascot may reach beyond its strip (widest sprite: Clawd's confetti at 2x).
 const MASCOT_MARGIN: f32 = 64.0;
+
+/// The first slot after `finished` on the grid `scheduled + k * period`.
+fn advance_tick(scheduled: Instant, finished: Instant, period: Duration) -> Instant {
+    let elapsed = finished.saturating_duration_since(scheduled).as_nanos();
+    scheduled + period * ((elapsed / period.as_nanos()) as u32 + 1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slow_frames_drop_only_elapsed_slots_and_keep_the_phase() {
+        let t0 = Instant::now();
+        let p = Duration::from_millis(83);
+        assert_eq!(advance_tick(t0, t0 + Duration::from_millis(10), p), t0 + p); // on time
+        assert_eq!(advance_tick(t0, t0 + Duration::from_millis(100), p), t0 + 2 * p); // one slot late
+        assert_eq!(advance_tick(t0, t0 + Duration::from_millis(250), p), t0 + 4 * p); // phase kept
+    }
+}
 
 /// Reconnect delay after `attempts` failed opens: quick at first (a knock usually re-enumerates
 /// within a second or two), then every 5 s while it stays unplugged.
@@ -60,18 +82,32 @@ pub fn run(ai_enabled: bool) -> ! {
     let mut work: Option<ui::Canvas> = None;
     let mut band_backup: Vec<u8> = Vec::new(); // the mascot band as redrawn, without mascots
     let mut last_tick = Instant::now();
+    // `[debug] perf = true`: frame timing in the log every 10 s
+    let perf_on = crate::config::get().debug.perf;
+    // frame pacing: this thread gets multimedia scheduling (EcoQoS stays on for the rest) and
+    // 1 ms timer resolution, so 83 ms waits do not round up to the 15.6 ms default tick
+    let _mmcss = mmcss::Multimedia::register();
+    unsafe {
+        windows::Win32::Media::timeBeginPeriod(1);
+    }
+    let mut next_tick = Instant::now(); // frame slots on a fixed 83 ms grid
+    let mut perf = perf::Perf::default();
+    let mut intended: Option<Instant> = None; // when this frame was meant to start
     loop {
         let t = Instant::now();
         *beat.lock().unwrap() = t;
+        if let Some(i) = intended.take() {
+            perf.tick(t, i);
+        }
         if panel.is_none() {
             match lcd::Lcd::open() {
                 Ok(p) => {
                     match lost.take() {
                         Some((since, _)) => log::info!(
-                            "LCD reconnected after {:.1}s ({} attempts), firmware {}",
-                            since.elapsed().as_secs_f64(), attempts + 1, p.firmware
+                            "LCD reconnected after {:.1}s ({} attempts), firmware {}, USB {} speed",
+                            since.elapsed().as_secs_f64(), attempts + 1, p.firmware, p.speed
                         ),
-                        None => log::info!("LCD connected, firmware {}", p.firmware),
+                        None => log::info!("LCD connected, firmware {}, USB {} speed", p.firmware, p.speed),
                     }
                     panel = Some(p);
                     attempts = 0;
@@ -131,11 +167,24 @@ pub fn run(ai_enabled: bool) -> ! {
                     mascots.update(dt, &areas);
                     mascots.draw(cv.pixmap_mut(), &areas);
                     enc.encode(cv.pixmap(), if fresh { 0..jpeg::BANDS } else { band.clone() });
-                    p.send_jpeg(enc.frame())
+                    perf.render(fresh, t.elapsed());
+                    let frame = enc.frame();
+                    perf.bytes(frame.len());
+                    let s0 = Instant::now();
+                    let r = p.send_jpeg(frame);
+                    perf.send(fresh, s0.elapsed());
+                    r
                 };
                 match sent {
                     Ok(_) if was_locked => Duration::from_secs(1),
-                    Ok(_) => FRAME,
+                    Ok(_) => {
+                        // next free slot on the grid; slots already past are dropped, not queued
+                        let now = Instant::now();
+                        let advanced = advance_tick(next_tick, now, FRAME);
+                        perf.skipped(perf::skipped_slots(next_tick + FRAME, advanced, FRAME));
+                        next_tick = advanced;
+                        next_tick.saturating_duration_since(t)
+                    }
                     Err(e) => {
                         log::warn!("LCD lost: {e:#}");
                         panel = None; // drop the handle before reopening
@@ -146,6 +195,14 @@ pub fn run(ai_enabled: bool) -> ! {
             }
             None => backoff(attempts.saturating_sub(1)),
         };
+        if panel.is_none() || was_locked {
+            next_tick = t + delay; // off the grid: start a new one when frames resume
+        }
+        perf.active(perf_on && panel.is_some() && !was_locked);
+        perf.report();
+        if perf_on && panel.is_some() && !was_locked {
+            intended = Some(next_tick);
+        }
         if let Some(ack) = wait(&ending, delay.saturating_sub(t.elapsed())) {
             end_session(panel.as_mut(), ack);
         }

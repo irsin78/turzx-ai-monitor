@@ -9,7 +9,7 @@ use crate::sensors::{self as hw};
 use crate::sources::{ai, weather};
 use crate::{mascot, state, ui};
 
-pub const COMMANDS: &str = "sensors | weather | claude-cli | layout | standby | mascots | jpeg-check | profile | fps-test | test-pattern";
+pub const COMMANDS: &str = "usb | sensors | weather | claude-cli | layout | standby | mascots | jpeg-check | profile | fps-test | test-pattern";
 
 /// Four vertical quarter bands (red, green, blue, white).
 fn test_bands() -> Vec<u8> {
@@ -235,6 +235,12 @@ pub fn run(cmd: &str) -> Result<()> {
                 n as f64 / secs, ms(t_rot), ms(t_enc), ms(t_send), bytes as f64 / n as f64 / 1024.0
             );
     
+        }
+        "usb" => {
+            use nusb::MaybeFuture;
+            for d in nusb::list_devices().wait()?.filter(|d| d.vendor_id() == lcd::VID && d.product_id() == lcd::PID) {
+                println!("TURZX {:04X}:{:04X} {:?} speed {:?}", d.vendor_id(), d.product_id(), d.product_string(), d.speed());
+            }
         }
         "test-pattern" => {
             let mut lcd = lcd::Lcd::open()?;

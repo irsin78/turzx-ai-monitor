@@ -60,7 +60,15 @@ fn main() -> Result<()> {
         // the dashboard proper, run (and restarted) by the supervisor below
         std::panic::set_hook(Box::new(|info| log::error!("panic: {info}")));
         log::info!("dashboard starting (admin: {})", pawnio::is_admin());
-        app::supervisor::eco_mode();
+        // no efficiency mode here: EcoQoS threads starve on busy E-cores, and the USB library's
+        // completion thread is one of ours (frames stalled for seconds under load); the
+        // supervisor, which does nothing, keeps it. Above-normal priority for the same reason:
+        // under a full CPU load that thread otherwise waits for Windows' starvation boost
+        // (seconds) before a finished frame is reported.
+        unsafe {
+            use windows::Win32::System::Threading::{GetCurrentProcess, SetPriorityClass, ABOVE_NORMAL_PRIORITY_CLASS};
+            let _ = SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
+        }
         config::watch();
         app::run(!arg("--no-ai"));
     }

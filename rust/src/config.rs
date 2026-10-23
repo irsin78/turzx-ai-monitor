@@ -25,6 +25,15 @@ pub struct Config {
     pub ai: Ai,
     pub fans: Fans,
     pub disks: Disks,
+    pub debug: Debug,
+}
+
+/// Diagnostics (not in the written template).
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct Debug {
+    /// log frame timing every 10 s
+    pub perf: bool,
 }
 
 /// Where the weather and air quality are for.
@@ -88,6 +97,7 @@ impl Default for Config {
             ai: Ai { claude: true, codex: true, antigravity: true },
             fans: Fans { labels: Vec::new() },
             disks: Disks::default(),
+            debug: Debug::default(),
         }
     }
 }
