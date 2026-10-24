@@ -33,6 +33,10 @@ When Windows shuts down, the panel switches to a standby screen and keeps it unt
 - **Robust**: reconnects within a second when the USB cable is knocked, restarts itself if a
   driver crashes it.
 - **Black panel** while the PC is locked, the monitors are off or the screen saver runs.
+- **While the PC is off** the panel plays a video by itself from its TF card: today's calendar
+  with upcoming and current movies (from [TMDB](https://www.themoviedb.org), free API key), or
+  your own clips with their details. The dashboard makes it every day and uploads it in the
+  background; at shutdown it starts it (the panel must keep getting power).
 - **Mounted upside down?** `rotation = 180` turns the picture around.
 
 ## Requirements
@@ -63,6 +67,7 @@ turzx-dashboard install [--no-autostart]
 turzx-dashboard uninstall [--purge]     # --purge also removes settings, logs and caches
 turzx-dashboard autostart on|off
 turzx-dashboard settings                # open the settings window
+turzx-dashboard install --quiet         # update without message boxes (no UAC once the task exists)
 turzx-dashboard run                     # run without installing
 ```
 
@@ -100,6 +105,12 @@ antigravity = true
 # codex.pro = "Pro 200"
 # claude.default_claude_max_5x = "Max 5x"
 
+[offline]                # the video while the PC is off (needs a TF card in the panel)
+tmdb_key = ""            # TMDB API key for the movies (also in the settings window)
+videos = ""              # clip folder: <name>.mp4 + <name>.json (title, release, now_playing, rating,
+                         # overview); empty = %LOCALAPPDATA%\TurzxDashboard\videos; clips win over movie stills
+fetch = ""               # a command run before the video is made, e.g. one that fills the clip folder
+
 [fans]
 labels = []              # e.g. ["Radiator", "Pump", "GPU"]
 
@@ -126,6 +137,8 @@ These endpoints are not public APIs and may change or stop working. Turn off any
 - Weather and air quality: [Open-Meteo](https://open-meteo.com) (no key; city lookup by its geocoding API).
   Air quality is the CAMS model, not station measurements.
 - Holidays: built-in table for Korea, [Nager.Date](https://date.nager.at) for other countries.
+- Movies: [TMDB](https://www.themoviedb.org) (free API key for non-commercial use, cached for a
+  week). This product uses the TMDB API but is not endorsed or certified by TMDB.
 - Logs: `%LOCALAPPDATA%\TurzxDashboard\dashboard.log`.
 
 ## Build

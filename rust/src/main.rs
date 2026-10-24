@@ -6,6 +6,7 @@ mod diag;
 mod i18n;
 mod install;
 mod logging;
+mod offline;
 #[cfg(mascots)]
 mod mascot {
     // personal mascot engine and art, outside the public repository (see build.rs)
@@ -33,13 +34,22 @@ fn main() -> Result<()> {
     logging::init();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let arg = |a: &str| args.iter().any(|x| x == a);
+    // --quiet: no message boxes (the elevated half of a command, scripts); the log has it all
+    let quiet = arg("--quiet");
     let done = |r: anyhow::Result<String>| -> Result<()> {
         match r {
-            Ok(msg) if !msg.is_empty() => install::tell(&msg, false),
+            Ok(msg) if !msg.is_empty() => {
+                log::info!("{msg}");
+                if !quiet {
+                    install::tell(&msg, false);
+                }
+            }
             Ok(_) => {}
             Err(e) => {
                 log::error!("{e:#}");
-                install::tell(&format!("{e:#}"), true);
+                if !quiet {
+                    install::tell(&format!("{e:#}"), true);
+                }
                 std::process::exit(1);
             }
         }

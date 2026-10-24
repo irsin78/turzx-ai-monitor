@@ -5,5 +5,5 @@ $rust = Join-Path $PSScriptRoot "..\rust"
 Push-Location $rust
 try { cargo build --release } finally { Pop-Location }
 $exe = Join-Path $rust "target\release\turzx-dashboard.exe"
-$p = Start-Process $exe -ArgumentList "install" -Wait -PassThru
+$p = Start-Process $exe -ArgumentList "install", "--quiet" -Wait -PassThru # one UAC prompt, no message box
 exit $p.ExitCode

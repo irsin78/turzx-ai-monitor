@@ -211,6 +211,33 @@ fn set_autostart(on: bool, exe: &Path) -> Result<&'static str> {
     }
 }
 
+/// Replace the installed program and restart its task, without administrator rights.
+fn update_in_place() -> Result<String> {
+    let me = std::env::current_exe()?;
+    anyhow::ensure!(!running_installed(), "this is the installed copy");
+    quiet("schtasks", &["/End", "/TN", TASK])?;
+    // the supervisor's job takes the worker down with it; an older supervisor without one
+    // leaves an elevated worker we cannot stop, and the copy below fails
+    let exe = installed_exe();
+    let mut copied = std::fs::copy(&me, &exe).map(|_| ());
+    for _ in 0..20 {
+        if copied.is_ok() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(300));
+        copied = std::fs::copy(&me, &exe).map(|_| ());
+    }
+    if let Err(e) = copied {
+        let _ = quiet("schtasks", &["/Run", "/TN", TASK]); // keep the old one going
+        return Err(e).with_context(|| format!("{} is still in use", exe.display()));
+    }
+    reg_set_str(UNINSTALL_KEY, "DisplayVersion", env!("CARGO_PKG_VERSION"));
+    reg_set_dword(UNINSTALL_KEY, "EstimatedSize", std::fs::metadata(&exe).map_or(0, |m| m.len() / 1024) as u32);
+    quiet("schtasks", &["/Run", "/TN", TASK])?;
+    log::info!("updated {} in place", exe.display());
+    Ok(format!("{APP} is updated and running.\n\nProgram: {}", install_dir().display()))
+}
+
 /// Start the installed dashboard in the background.
 fn start(exe: &Path) {
     if task_exists() {
@@ -240,12 +267,31 @@ pub fn ask(text: &str) -> bool {
 }
 
 pub fn install(autostart: bool) -> Result<String> {
+    // An update of a copy that already runs from its task needs no administrator rights: the
+    // user can stop and start their own task and the program folder is theirs.
+    if autostart && task_exists() && !pawnio::is_admin() {
+        match update_in_place() {
+            Ok(msg) => return Ok(msg),
+            Err(e) => log::info!("update without administrator rights not possible ({e:#}); asking for them"),
+        }
+    }
     // the task (PawnIO) and replacing an elevated install need administrator rights
     let need_admin = (autostart && pawnio_installed()) || task_exists();
     if need_admin && !pawnio::is_admin() {
         let args = if autostart { "install --quiet" } else { "install --no-autostart --quiet" };
         if elevated(args).is_ok() {
-            return Ok(String::new()); // the elevated copy did it and told the user
+            // the elevated copy did it quietly; tell the user here
+            return Ok(format!(
+                "{APP} is installed and running.
+
+Program: {}
+Autostart: scheduled task (administrator)
+Settings: {}
+
+Uninstall from Settings > Apps, or run `{EXE} uninstall`.",
+                install_dir().display(),
+                config::path().display()
+            ));
         }
         log::warn!("no administrator rights: installing with the Run key instead of a task");
     }
@@ -294,7 +340,7 @@ pub fn install(autostart: bool) -> Result<String> {
 pub fn uninstall(purge: bool) -> Result<String> {
     if task_exists() && !pawnio::is_admin() {
         elevated(if purge { "uninstall --purge --quiet" } else { "uninstall --quiet" })?;
-        return Ok(String::new());
+        return Ok(format!("{APP} is uninstalled."));
     }
     stop_running();
     set_autostart(false, &installed_exe())?;
@@ -330,7 +376,7 @@ pub fn uninstall(purge: bool) -> Result<String> {
 pub fn autostart(on: bool) -> Result<String> {
     if (task_exists() || (on && pawnio_installed())) && !pawnio::is_admin() {
         elevated(if on { "autostart on --quiet" } else { "autostart off --quiet" })?;
-        return Ok(String::new());
+        return Ok(format!("Autostart: {}", if on { "on" } else { "off" }));
     }
     let exe = if installed_exe().is_file() { installed_exe() } else { std::env::current_exe()? };
     Ok(format!("Autostart: {}", set_autostart(on, &exe)?))

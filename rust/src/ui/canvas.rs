@@ -177,17 +177,19 @@ impl Canvas {
     }
 
     pub(super) fn get(&self, x: f32, y: f32) -> Rgb {
-        let (x, y) = (x.clamp(0.0, W as f32 - 1.0) as u32, y.clamp(0.0, H as f32 - 1.0) as u32);
-        let p = self.pm.pixels()[(y * W + x) as usize];
+        let (w, h) = (self.pm.width(), self.pm.height());
+        let (x, y) = (x.clamp(0.0, w as f32 - 1.0) as u32, y.clamp(0.0, h as f32 - 1.0) as u32);
+        let p = self.pm.pixels()[(y * w + x) as usize];
         [p.red(), p.green(), p.blue()]
     }
 
     pub(super) fn blend(&mut self, x: i32, y: i32, c: Rgb, a: f32) {
-        if x < 0 || y < 0 || x >= W as i32 || y >= H as i32 || a <= 0.0 {
+        let (w, h) = (self.pm.width(), self.pm.height()); // the dashboard is W x H; parts may be smaller
+        if x < 0 || y < 0 || x >= w as i32 || y >= h as i32 || a <= 0.0 {
             return;
         }
         let a = a.min(1.0);
-        let px = &mut self.pm.pixels_mut()[(y as u32 * W + x as u32) as usize];
+        let px = &mut self.pm.pixels_mut()[(y as u32 * w + x as u32) as usize];
         let old = [px.red(), px.green(), px.blue()];
         let n = [0, 1, 2].map(|i| (old[i] as f32 * (1.0 - a) + c[i] as f32 * a).round() as u8);
         *px = tiny_skia::PremultipliedColorU8::from_rgba(n[0], n[1], n[2], 255).unwrap();
@@ -293,11 +295,18 @@ impl Canvas {
             Anchor::Mt => y - self.ink_top(s, f),
             Anchor::Mm => y + (asc + desc) / 2.0,
         };
-        self.glyphs(x0, baseline, s, f, c, 0.0);
+        self.glyphs(x0, baseline, s, f, c, 0.0, 1.0);
+    }
+
+    /// `text` at `opacity`.
+    pub(super) fn text_faded(&mut self, x: f32, y: f32, s: &str, f: Font_, c: Rgb, opacity: f32) {
+        if opacity > 0.0 {
+            self.glyphs(x, y + f.scaled().ascent(), s, f, c, 0.0, opacity.min(1.0));
+        }
     }
 
     /// Draw `s` from `x` on `baseline`, adding `spacing` between characters; returns the width.
-    fn glyphs(&mut self, x: f32, baseline: f32, s: &str, f: Font_, c: Rgb, spacing: f32) -> f32 {
+    fn glyphs(&mut self, x: f32, baseline: f32, s: &str, f: Font_, c: Rgb, spacing: f32, opacity: f32) -> f32 {
         let (mut pen, mut prev) = (x, None::<(ab_glyph::GlyphId, *const FontRef)>);
         f.each(s, |ch, sf| {
             let id = sf.glyph_id(ch);
@@ -309,7 +318,7 @@ impl Canvas {
             }
             if let Some(og) = sf.outline_glyph(id.with_scale_and_position(sf.scale, point(pen, baseline))) {
                 let b = og.px_bounds();
-                og.draw(|gx, gy, cov| self.blend(b.min.x as i32 + gx as i32, b.min.y as i32 + gy as i32, c, cov));
+                og.draw(|gx, gy, cov| self.blend(b.min.x as i32 + gx as i32, b.min.y as i32 + gy as i32, c, cov * opacity));
             }
             pen += sf.h_advance(id);
             prev = Some((id, sf.font as *const _));
@@ -345,7 +354,7 @@ impl Canvas {
         });
         width += spacing * n.saturating_sub(1) as f32;
         let x0 = if right { x - width } else { x };
-        self.glyphs(x0, y + f.scaled().ascent(), &text, f, fill.unwrap_or(LABEL), spacing);
+        self.glyphs(x0, y + f.scaled().ascent(), &text, f, fill.unwrap_or(LABEL), spacing, 1.0);
         width
     }
 

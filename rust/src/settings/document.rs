@@ -89,6 +89,7 @@ pub fn validate(c: &Config) -> Result<()> {
         "Enter a city (1-120 characters)."
     );
     ensure!(["auto", "kr", "us"].contains(&c.air_quality.scale.as_str()), "Select an air-quality scale.");
+    ensure!(c.offline.tmdb_key.chars().all(|ch| ch.is_ascii_graphic()) && c.offline.tmdb_key.len() <= 400, "The TMDB key has unexpected characters.");
     Ok(())
 }
 
@@ -112,6 +113,7 @@ fn update(text: &str, old: &Config, new: &Config) -> Result<String> {
     change!(&["ai", "claude"], old.ai.claude, new.ai.claude);
     change!(&["ai", "codex"], old.ai.codex, new.ai.codex);
     change!(&["ai", "antigravity"], old.ai.antigravity, new.ai.antigravity);
+    change!(&["offline", "tmdb_key"], &old.offline.tmdb_key, &new.offline.tmdb_key);
     let _: Config = toml::from_str(&result).context("the edited file is not valid TOML")?;
     Ok(result)
 }

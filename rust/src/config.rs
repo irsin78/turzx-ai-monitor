@@ -28,7 +28,21 @@ pub struct Config {
     pub plan_labels: PlanLabels,
     pub fans: Fans,
     pub disks: Disks,
+    pub offline: Offline,
     pub debug: Debug,
+}
+
+/// What the panel shows while the PC is off.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct Offline {
+    /// TMDB API key (v3 key or v4 read token) for the movie video; empty = no movies
+    pub tmdb_key: String,
+    /// folder of video clips to use instead of movie stills (`<name>.mp4` with `<name>.json`);
+    /// empty = `%LOCALAPPDATA%\TurzxDashboard\videos`
+    pub videos: String,
+    /// command run before the video is made (e.g. something that fills the clip folder)
+    pub fetch: String,
 }
 
 /// Names shown next to the AI names, keyed by the plan value the service reports; values that
@@ -130,6 +144,7 @@ impl Default for Config {
             plan_labels: PlanLabels::default(),
             fans: Fans { labels: Vec::new() },
             disks: Disks::default(),
+            offline: Offline::default(),
             debug: Debug::default(),
         }
     }
@@ -278,6 +293,11 @@ labels = [{labels}]
 show = [{disks}]
 # Names for them, e.g. ["System", "Games"]; empty = the drive model ("990 PRO")
 labels = [{disk_labels}]
+
+[offline]
+# While the PC is off the panel plays a video of upcoming movies, made from TMDB
+# (themoviedb.org, free API key for personal use; also in the settings window)
+tmdb_key = "{tmdb_key}"
 "#,
         lang = c.language,
         clock = c.clock,
@@ -296,6 +316,7 @@ labels = [{disk_labels}]
         labels = c.fans.labels.iter().map(|l| format!("{l:?}")).collect::<Vec<_>>().join(", "),
         disks = c.disks.show.iter().map(|l| format!("{l:?}")).collect::<Vec<_>>().join(", "),
         disk_labels = c.disks.labels.iter().map(|l| format!("{l:?}")).collect::<Vec<_>>().join(", "),
+        tmdb_key = c.offline.tmdb_key,
     )
 }
 

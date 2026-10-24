@@ -92,6 +92,8 @@ pub fn run(ai_enabled: bool) -> ! {
     let mut next_tick = Instant::now(); // frame slots on a fixed 83 ms grid
     let mut perf = perf::Perf::default();
     let mut intended: Option<Instant> = None; // when this frame was meant to start
+    crate::offline::start();
+    let mut upload: Option<crate::offline::Upload> = None;
     loop {
         let t = Instant::now();
         *beat.lock().unwrap() = t;
@@ -180,6 +182,17 @@ pub fn run(ai_enabled: bool) -> ! {
                 match sent {
                     Ok(_) if blank => Duration::from_secs(1),
                     Ok(_) => {
+                        // the video for while the PC is off goes to the panel a megabyte at a time
+                        if upload.is_none() {
+                            upload = crate::offline::Upload::take();
+                        }
+                        if let Some(u) = upload.as_mut() {
+                            match u.step(p) {
+                                Ok(false) => {}
+                                Ok(true) => upload = None,
+                                Err(e) => upload.take().unwrap().abandon(&e),
+                            }
+                        }
                         // next free slot on the grid; slots already past are dropped, not queued
                         let now = Instant::now();
                         let advanced = advance_tick(next_tick, now, FRAME);

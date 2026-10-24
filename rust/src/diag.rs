@@ -9,7 +9,7 @@ use crate::sensors::{self as hw};
 use crate::sources::{ai, weather};
 use crate::{mascot, state, ui};
 
-pub const COMMANDS: &str = "usb | sensors | weather | claude-cli | layout | standby | mascots | jpeg-check | profile | fps-test | test-pattern";
+pub const COMMANDS: &str = "usb | sensors | weather | claude-cli | layout | standby | mascots | jpeg-check | profile | fps-test | test-pattern | sd | sd-put | sd-play | sd-stop | encode-test | offline | sd-rm | decode-test";
 
 /// Four vertical quarter bands (red, green, blue, white).
 fn test_bands() -> Vec<u8> {
@@ -248,6 +248,104 @@ pub fn run(cmd: &str) -> Result<()> {
             for d in nusb::list_devices().wait()?.filter(|d| d.vendor_id() == lcd::VID && d.product_id() == lcd::PID) {
                 println!("TURZX {:04X}:{:04X} {:?} speed {:?}", d.vendor_id(), d.product_id(), d.product_string(), d.speed());
             }
+        }
+        "sd" => {
+            // TF card on the panel: sizes and listings (the dashboard must not be running)
+            let mut lcd = lcd::Lcd::open()?;
+            println!("firmware: {}", lcd.firmware);
+            let st = lcd.storage()?;
+            println!("TF card: total {} used {} free {} | flash: total {} used {} free {}", st.sd_total, st.sd_used, st.sd_free, st.flash_total, st.flash_used, st.flash_free);
+            for path in ["/tmp/sdcard/mmcblk0p1/", "/tmp/sdcard/mmcblk0p1/img/", "/tmp/sdcard/mmcblk0p1/video/", "/usr/data/"] {
+                let replies = lcd.list_dir(path)?;
+                println!("--- {path}: {} replies", replies.len());
+                for (i, r) in replies.iter().enumerate() {
+                    let body = &r[8.min(r.len())..];
+                    let end = body.iter().rposition(|&b| b != 0).map_or(0, |n| n + 1);
+                    if end > 0 {
+                        println!("[{i}] cmd echo {} len {}: {:?}", r[0], r.len(), String::from_utf8_lossy(&body[..end]));
+                    }
+                }
+            }
+        }
+        "sd-put" => {
+            // copy a local file to the panel: TURZX_SD_FILE=<local> TURZX_SD_PATH=<panel path>
+            let (local, remote) = (std::env::var("TURZX_SD_FILE")?, std::env::var("TURZX_SD_PATH")?);
+            let data = std::fs::read(&local)?;
+            let mut lcd = lcd::Lcd::open()?;
+            let t = std::time::Instant::now();
+            lcd.put_file(&remote, &data)?;
+            println!("{} bytes -> {remote} in {:?}", data.len(), t.elapsed());
+            for line in lcd.list_dir(remote.rsplit_once('/').map_or("/", |(d, _)| d))?.iter().take(1) {
+                println!("{:?}", String::from_utf8_lossy(&line[8..]).trim_end_matches('\0'));
+            }
+        }
+        "sd-play" => {
+            // play a panel file on its own: TURZX_SD_PATH=<panel path>
+            let remote = std::env::var("TURZX_SD_PATH")?;
+            let mut lcd = lcd::Lcd::open()?;
+            println!("state before: {}", lcd.local_state()?);
+            lcd.play_local(&remote)?;
+            std::thread::sleep(Duration::from_secs(2));
+            println!("state after: {}", lcd.local_state()?);
+        }
+        "sd-stop" => lcd::Lcd::open()?.stop_local()?,
+        "sd-rm" => {
+            // delete panel files: TURZX_SD_PATH=<path>[;<path>...]
+            let mut lcd = lcd::Lcd::open()?;
+            for p in std::env::var("TURZX_SD_PATH")?.split(';').filter(|p| !p.is_empty()) {
+                lcd.delete(p)?;
+                println!("deleted {p}");
+            }
+        }
+        "encode-test" => {
+            // 5 s of the dashboard preview with a moving bar through the Windows H.264 encoder
+            let st = fake_state();
+            let base = ui::render(&st, chrono::Local::now());
+            let t = std::time::Instant::now();
+            let mut enc = crate::offline::encode::H264::new(30, 4_000_000, false)?;
+            for i in 0..150 {
+                let mut cv = base.clone();
+                let x = (i * 12) as f32;
+                let mut paint = tiny_skia::Paint::default();
+                paint.set_color_rgba8(255, 80, 40, 255);
+                cv.pixmap_mut().fill_rect(tiny_skia::Rect::from_xywh(x, 0.0, 40.0, 480.0).unwrap(), &paint, tiny_skia::Transform::identity(), None);
+                enc.push(cv.pixmap())?;
+            }
+            let data = enc.finish()?;
+            std::fs::write("encode_test.h264", &data)?;
+            println!("150 frames -> {} KB in {:?}", data.len() / 1024, t.elapsed());
+        }
+        "offline" => {
+            // the video for while the PC is off: offline.h264 and a few frames as PNG
+            let now = chrono::Local::now();
+            let t = std::time::Instant::now();
+            let data = crate::offline::build(&now)?;
+            std::fs::write("offline.h264", &data)?;
+            println!("offline.h264: {} KB in {:?}", data.len() / 1024, t.elapsed());
+            let key = crate::config::get().offline.tmdb_key.clone();
+            let slides: Vec<ui::Slide> = crate::sources::movies::load(&key)?
+                .into_iter()
+                .filter_map(|m| Some(ui::Slide { image: crate::sources::movies::backdrop(&m).ok()?, title: m.title, now_playing: m.now_playing, release: m.release, rating: m.rating, overview: m.overview }))
+                .collect();
+            let base = ui::offline_base(&now);
+            for (name, t) in [("offline_a.png", 3.0), ("offline_b.png", 5.7), ("offline_c.png", 9.0)] {
+                ui::offline_frame(&base, &slides, t).save_png(name)?;
+            }
+        }
+        "decode-test" => {
+            // decode TURZX_VIDEO: frame count, size, time; save frame 100 as PNG
+            let path = std::path::PathBuf::from(std::env::var("TURZX_VIDEO")?);
+            let mut v = crate::offline::decode::Video::open(&path)?;
+            let t = std::time::Instant::now();
+            let (mut n, mut last) = (0, 0.0);
+            while let Some((time, pm)) = v.next()? {
+                if n == 100 {
+                    pm.save_png("decode_test.png")?;
+                }
+                n += 1;
+                last = time;
+            }
+            println!("{}x{}: {n} frames, last at {last:.2}s, decoded in {:?}", v.width, v.height, t.elapsed());
         }
         "test-pattern" => {
             let mut lcd = lcd::Lcd::open()?;

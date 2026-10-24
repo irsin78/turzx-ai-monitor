@@ -22,15 +22,39 @@ pub(super) fn signal_ending() {
     }
 }
 
+/// A job that takes the worker (and whatever it starts) down with the supervisor, so stopping the
+/// scheduled task (which ends only the supervisor) leaves nothing behind holding the panel.
+fn kill_with_me() -> Option<windows::Win32::Foundation::HANDLE> {
+    use windows::Win32::System::JobObjects::*;
+    unsafe {
+        let job = CreateJobObjectW(None, None).ok()?;
+        let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        let size = std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32;
+        SetInformationJobObject(job, JobObjectExtendedLimitInformation, &info as *const _ as *const _, size).ok()?;
+        Some(job)
+    }
+}
+
 pub fn supervise() -> ! {
     use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
     let ending = unsafe { CreateEventW(None, true, false, ENDING_EVENT) }.ok();
     let is_ending = || ending.is_some_and(|h| unsafe { WaitForSingleObject(h, 0) }.0 == 0);
     let args: Vec<String> = std::env::args().skip(1).collect();
+    let job = kill_with_me();
     let mut restarts = 0u32;
     loop {
         let started = Instant::now();
-        let status = std::env::current_exe().and_then(|exe| std::process::Command::new(exe).args(&args).arg("--worker").status());
+        let status = std::env::current_exe().and_then(|exe| {
+            let mut child = std::process::Command::new(exe).args(&args).arg("--worker").spawn()?;
+            if let Some(job) = job {
+                use std::os::windows::io::AsRawHandle;
+                unsafe {
+                    let _ = windows::Win32::System::JobObjects::AssignProcessToJobObject(job, windows::Win32::Foundation::HANDLE(child.as_raw_handle()));
+                }
+            }
+            child.wait()
+        });
         let ran = started.elapsed();
         if is_ending() {
             log::info!("supervisor: session ending, not restarting");

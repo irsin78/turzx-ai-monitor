@@ -23,7 +23,7 @@ use document::Document;
 
 const CLASS: PCWSTR = w!("TurzxDashboardSettings");
 const WIDTH: i32 = 520;
-const HEIGHT: i32 = 440;
+const HEIGHT: i32 = 476;
 const LANGUAGE: usize = 100;
 const CLOCK: usize = 101;
 const TEMPERATURE: usize = 102;
@@ -33,6 +33,7 @@ const AIR: usize = 105;
 const CLAUDE: usize = 106;
 const CODEX: usize = 107;
 const ANTIGRAVITY: usize = 108;
+const TMDB: usize = 109;
 const SAVE: usize = 1;
 const CANCEL: usize = 2;
 const EDIT: usize = 3;
@@ -306,10 +307,16 @@ impl Window {
         } else {
             self.text("Saving restarts the dashboard. More options (fans, disks, plan names) are in the file.", "저장하면 대시보드가 다시 시작됩니다. 팬·디스크 이름, 요금제 표시 등은 파일에서 바꿀 수 있습니다.")
         };
-        self.add(hwnd, w!("STATIC"), notice, 0, [24, 346, 472, 40], 0, false)?;
-        self.add(hwnd, w!("BUTTON"), self.text("Edit file…", "파일 편집…"), EDIT, [24, 396, 126, 30], WS_TABSTOP.0 | BS_PUSHBUTTON as u32, false)?;
-        self.add(hwnd, w!("BUTTON"), self.text("Save", "저장"), SAVE, [298, 396, 94, 30], WS_TABSTOP.0 | BS_DEFPUSHBUTTON as u32, false)?;
-        self.add(hwnd, w!("BUTTON"), self.text("Cancel", "취소"), CANCEL, [402, 396, 94, 30], WS_TABSTOP.0 | BS_PUSHBUTTON as u32, false)?;
+        // the key is shown masked; it stays in config.toml only
+        self.label(hwnd, self.text("TMDB API key", "TMDB API 키"), 338)?;
+        let key = self.add(hwnd, w!("EDIT"), &c.offline.tmdb_key, TMDB, [204, 338, 292, 27], WS_BORDER.0 | WS_TABSTOP.0 | (ES_AUTOHSCROLL | ES_PASSWORD) as u32, false)?;
+        unsafe {
+            SendMessageW(key, EM_SETLIMITTEXT, Some(WPARAM(400)), None);
+        }
+        self.add(hwnd, w!("STATIC"), notice, 0, [24, 382, 472, 40], 0, false)?;
+        self.add(hwnd, w!("BUTTON"), self.text("Edit file…", "파일 편집…"), EDIT, [24, 432, 126, 30], WS_TABSTOP.0 | BS_PUSHBUTTON as u32, false)?;
+        self.add(hwnd, w!("BUTTON"), self.text("Save", "저장"), SAVE, [298, 432, 94, 30], WS_TABSTOP.0 | BS_DEFPUSHBUTTON as u32, false)?;
+        self.add(hwnd, w!("BUTTON"), self.text("Cancel", "취소"), CANCEL, [402, 432, 94, 30], WS_TABSTOP.0 | BS_PUSHBUTTON as u32, false)?;
         Ok(())
     }
 
@@ -362,6 +369,9 @@ impl Window {
         c.ai.claude = checked(CLAUDE);
         c.ai.codex = checked(CODEX);
         c.ai.antigravity = checked(ANTIGRAVITY);
+        let mut key = [0u16; 512];
+        let len = unsafe { GetWindowTextW(self.control(TMDB), &mut key) };
+        c.offline.tmdb_key = String::from_utf16_lossy(&key[..len as usize]).trim().into();
         document::validate(&c)?;
         Ok(c)
     }

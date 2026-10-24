@@ -112,8 +112,21 @@ pub(super) fn end_session(panel: Option<&mut lcd::Lcd>, ack: EndSession) -> ! {
     };
     match panel {
         Some(p) => {
-            if let Err(e) = p.show_landscape(&ui::standby().rgb()) {
-                log::warn!("standby send failed: {e:#}");
+            // a video on the panel's card plays by itself and keeps going after the PC is off
+            let playing = crate::offline::video().is_some_and(|v| match p.keep_on_without_pc().and_then(|()| p.play_local(&v)) {
+                Ok(()) => {
+                    log::info!("offline video: {v}");
+                    true
+                }
+                Err(e) => {
+                    log::warn!("offline video {v} failed: {e:#}");
+                    false
+                }
+            });
+            if !playing {
+                if let Err(e) = p.show_landscape(&ui::standby().rgb()) {
+                    log::warn!("standby send failed: {e:#}");
+                }
             }
         }
         None => log::warn!("standby skipped: LCD not connected"),
