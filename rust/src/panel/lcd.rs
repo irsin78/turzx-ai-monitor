@@ -22,6 +22,7 @@ pub const HEIGHT: usize = 1920;
 
 const KEY: &[u8; 8] = b"slv3tuzx";
 const CMD_GET_VERSION: u8 = 10;
+const CMD_REBOOT: u8 = 11;
 const CMD_JPEG: u8 = 101;
 // Storage queries (as the vendor app uses them). The panel runs Linux: the TF card is
 // mounted at /tmp/sdcard/mmcblk0p1/ (img/, video/), the built-in flash at /usr/data/.
@@ -89,15 +90,35 @@ impl Lcd {
         let inp = iface.endpoint::<Bulk, In>(0x81)?;
         let mut lcd = Lcd { out, inp, t0: Instant::now(), _iface: iface, firmware: String::new(), speed, tx: Vec::with_capacity(256 * 1024) };
         lcd.drain();
-        lcd.firmware = match lcd.version() {
+        let sane = |v: Result<String>| v.and_then(|v| if v.starts_with("turzx") { Ok(v) } else { anyhow::bail!("garbled version {v:?}") });
+        lcd.firmware = match sane(lcd.version()) {
             Ok(v) => v,
             Err(first) => {
                 lcd.clear_halts();
                 lcd.drain();
-                lcd.version().with_context(|| format!("no answer after clearing a halt (first try: {first:#})"))?
+                match sane(lcd.version()) {
+                    Ok(v) => v,
+                    Err(second) => {
+                        lcd.resync().with_context(|| format!("no answer after clearing a halt (first try: {first:#}; then: {second:#})"))?;
+                        anyhow::bail!("the panel was out of step after an interrupted frame; restarting it");
+                    }
+                }
             }
         };
         Ok(lcd)
+    }
+
+    /// A panel left waiting for the rest of an interrupted frame takes every message as more of
+    /// that frame. Fill the frame up with zeros (whole zero blocks after it fail the header check
+    /// and are ignored), then restart the panel: the garbled frame may have closed its screen.
+    fn resync(&mut self) -> Result<()> {
+        let _ = self.out.transfer_blocking(Buffer::from(vec![0u8; 320 * 1024]), Duration::from_secs(5));
+        self.drain();
+        let v = self.version()?;
+        anyhow::ensure!(v.starts_with("turzx"), "garbled version {v:?} after filling up");
+        log::warn!("panel was waiting for the rest of a frame; filled it up and restarting the panel ({v})");
+        let _ = self.command(CMD_REBOOT);
+        Ok(())
     }
 
     fn clear_halts(&mut self) {
@@ -137,9 +158,23 @@ impl Lcd {
     }
 
     fn transfer(&mut self, data: Vec<u8>, timeout: Duration) -> Result<Vec<u8>> {
+        let len = data.len();
         let c = self.out.transfer_blocking(Buffer::from(data), timeout);
-        c.status.context("bulk OUT")?;
-        self.tx = c.buffer.into_vec(); // keep the allocation for the next frame
+        if let Err(e) = c.status {
+            // The panel reads exactly the length it was told, with no time limit: a message cut
+            // short would take the next message's bytes as its rest, and the garbled JPEG makes
+            // the panel's program quit or close its screen. Send the rest so it stays in step.
+            let sent = c.actual_len;
+            if sent == 0 || sent >= len {
+                return Err(e).context("bulk OUT");
+            }
+            let rest = c.buffer.into_vec()[sent..len].to_vec();
+            let c2 = self.out.transfer_blocking(Buffer::from(rest), Duration::from_secs(10));
+            c2.status.with_context(|| format!("bulk OUT stopped after {sent} of {len} bytes ({e}); the rest failed too"))?;
+            log::warn!("bulk OUT stopped after {sent} of {len} bytes ({e}); sent the rest");
+        } else {
+            self.tx = c.buffer.into_vec(); // keep the allocation for the next frame
+        }
         // Each reply is followed by a zero-length packet; skip ZLPs.
         for _ in 0..4 {
             let c = self.inp.transfer_blocking(Buffer::new(512), timeout);

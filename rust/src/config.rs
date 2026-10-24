@@ -349,8 +349,11 @@ fn modified() -> Option<SystemTime> {
     std::fs::metadata(path()).and_then(|m| m.modified()).ok()
 }
 
-/// Exit (code 0) when the settings file changes; the supervisor starts the dashboard again
-/// right away, so every setting takes effect without special handling.
+/// Set when the settings file changed: the frame loop exits (code 0) between two frames, never
+/// in the middle of one, and the supervisor starts the dashboard again right away, so every
+/// setting takes effect without special handling.
+pub static RESTART: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 pub fn watch() {
     let start = modified();
     std::thread::Builder::new()
@@ -360,7 +363,9 @@ pub fn watch() {
             if modified() != start {
                 std::thread::sleep(Duration::from_millis(500)); // let the editor finish writing
                 log::info!("settings changed: restarting");
-                std::process::exit(0);
+                RESTART.store(true, std::sync::atomic::Ordering::Relaxed);
+                std::thread::sleep(Duration::from_secs(15));
+                std::process::exit(0); // the frame loop did not get there (no panel, stuck call)
             }
         })
         .expect("spawn thread");

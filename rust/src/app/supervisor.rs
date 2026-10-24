@@ -22,6 +22,25 @@ pub(super) fn signal_ending() {
     }
 }
 
+/// Worker exit code: asked to quit (an update replaces the program); the supervisor ends too.
+pub const QUIT: i32 = 4;
+
+/// The file an update creates to have the dashboard stop between frames.
+pub fn quit_file() -> std::path::PathBuf {
+    std::path::PathBuf::from(std::env::var("LOCALAPPDATA").unwrap_or_default()).join(r"TurzxDashboard\quit")
+}
+
+/// Whether an update asked the dashboard to stop (checked at most twice a second).
+pub(super) fn quit_requested() -> bool {
+    static LAST: Mutex<Option<Instant>> = Mutex::new(None);
+    let mut last = LAST.lock().unwrap();
+    if last.is_some_and(|t| t.elapsed() < Duration::from_millis(500)) {
+        return false;
+    }
+    *last = Some(Instant::now());
+    quit_file().exists()
+}
+
 /// A job that takes the worker (and whatever it starts) down with the supervisor, so stopping the
 /// scheduled task (which ends only the supervisor) leaves nothing behind holding the panel.
 fn kill_with_me() -> Option<windows::Win32::Foundation::HANDLE> {
@@ -61,6 +80,11 @@ pub fn supervise() -> ! {
             loop {
                 thread::sleep(Duration::from_secs(60));
             }
+        }
+        if status.as_ref().is_ok_and(|s| s.code() == Some(QUIT)) {
+            log::info!("supervisor: quitting for an update");
+            let _ = std::fs::remove_file(quit_file());
+            std::process::exit(0);
         }
         if status.as_ref().is_ok_and(|s| s.code() == Some(0)) {
             // the worker restarts itself on purpose (settings changed)

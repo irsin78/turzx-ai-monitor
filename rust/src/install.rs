@@ -92,7 +92,40 @@ fn elevated(args: &str) -> Result<()> {
 }
 
 /// Stop the running dashboard (task, supervisor and worker), waiting until the exe is free.
+/// Ask the running dashboard to stop between two frames and wait up to 5 s for it: killed in the
+/// middle of a frame, it would leave the panel waiting for the rest of the frame.
+fn ask_to_quit() {
+    let file = crate::app::supervisor::quit_file();
+    if std::fs::write(&file, b"update").is_err() {
+        return;
+    }
+    for _ in 0..25 {
+        if dashboard_processes().is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let _ = std::fs::remove_file(&file);
+}
+
+/// Running dashboards (no arguments, `run` or `--worker`), not this process.
+fn dashboard_processes() -> Vec<u32> {
+    let me = std::process::id();
+    let mut sys = sysinfo::System::new();
+    sys.refresh_processes_specifics(sysinfo::ProcessesToUpdate::All, true, sysinfo::ProcessRefreshKind::nothing().with_cmd(sysinfo::UpdateKind::Always));
+    sys.processes()
+        .values()
+        .filter(|p| p.name().eq_ignore_ascii_case(EXE) && p.pid().as_u32() != me)
+        .filter(|p| {
+            let args: Vec<String> = p.cmd().iter().skip(1).map(|a| a.to_string_lossy().to_lowercase()).collect();
+            args.is_empty() || args.iter().any(|a| a == "run" || a == "--worker")
+        })
+        .map(|p| p.pid().as_u32())
+        .collect()
+}
+
 fn stop_running() {
+    ask_to_quit();
     if task_exists() {
         let _ = quiet("schtasks", &["/End", "/TN", TASK]);
     }
@@ -215,6 +248,7 @@ fn set_autostart(on: bool, exe: &Path) -> Result<&'static str> {
 fn update_in_place() -> Result<String> {
     let me = std::env::current_exe()?;
     anyhow::ensure!(!running_installed(), "this is the installed copy");
+    ask_to_quit();
     quiet("schtasks", &["/End", "/TN", TASK])?;
     // the supervisor's job takes the worker down with it; an older supervisor without one
     // leaves an elevated worker we cannot stop, and the copy below fails

@@ -218,6 +218,14 @@ pub fn run(ai_enabled: bool) -> ! {
         if perf_on && panel.is_some() && !blank {
             intended = Some(next_tick);
         }
+        // nothing is on its way to the panel here: the place to stop
+        if crate::config::RESTART.load(std::sync::atomic::Ordering::Relaxed) {
+            std::process::exit(0);
+        }
+        if supervisor::quit_requested() {
+            log::info!("asked to quit (update)");
+            std::process::exit(supervisor::QUIT);
+        }
         if let Some(ack) = wait(&ending, delay.saturating_sub(t.elapsed())) {
             end_session(panel.as_mut(), ack);
         }
