@@ -5,7 +5,6 @@
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -16,7 +15,6 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const UA: &str = "turzx-dashboard";
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -132,23 +130,21 @@ fn agent() -> ureq::Agent {
 
 struct Reply {
     status: u16,
-    retry_after: Option<f64>,
     body: Value,
 }
 
 fn send(req: ureq::RequestBuilder<ureq::typestate::WithoutBody>) -> Result<Reply> {
     let mut r = req.call()?;
     let status = r.status().as_u16();
-    let retry_after = r.headers().get("retry-after").and_then(|v| v.to_str().ok()?.trim().parse().ok());
     let body = r.body_mut().read_json().unwrap_or(Value::Null);
-    Ok(Reply { status, retry_after, body })
+    Ok(Reply { status, body })
 }
 
 fn send_json(req: ureq::RequestBuilder<ureq::typestate::WithBody>, body: &Value) -> Result<Reply> {
     let mut r = req.send_json(body)?;
     let status = r.status().as_u16();
     let body = r.body_mut().read_json().unwrap_or(Value::Null);
-    Ok(Reply { status, retry_after: None, body })
+    Ok(Reply { status, body })
 }
 
 fn iso(v: &Value) -> Option<f64> {
@@ -197,17 +193,6 @@ impl Cache {
         self.save(&snapshot);
     }
 
-    pub fn not_before(&self, name: &str) -> f64 {
-        self.data.lock().unwrap().get(name).and_then(|e| e["not_before"].as_f64()).unwrap_or(0.0)
-    }
-
-    pub fn set_not_before(&self, name: &str, t: f64) {
-        let mut d = self.data.lock().unwrap();
-        d.entry(name.to_string()).or_insert_with(|| json!({}))["not_before"] = json!(t);
-        let snapshot = d.clone();
-        drop(d);
-        self.save(&snapshot);
-    }
 }
 
 // --- Claude ---------------------------------------------------------------------
@@ -230,97 +215,6 @@ fn claude_argv() -> Vec<std::ffi::OsString> {
     match npm_dir.into_iter().chain(path_dirs).map(|d| d.join("claude.cmd")).find(|p| p.is_file()) {
         Some(cmd) => vec!["cmd.exe".into(), "/c".into(), cmd.into()],
         None => vec![home().join(r".local\bin\claude.exe").into()],
-    }
-}
-
-/// `claude <args>` without a console window.
-fn claude_command(args: &[&str]) -> std::process::Command {
-    let argv = claude_argv();
-    let mut c = std::process::Command::new(&argv[0]);
-    c.args(&argv[1..]).args(args).creation_flags(CREATE_NO_WINDOW);
-    c
-}
-
-/// User-Agent must look like Claude Code (CodexBar: "claude-code/<version>").
-fn claude_version() -> String {
-    claude_command(&["--version"])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8_lossy(&o.stdout).split_whitespace().next().map(str::to_string))
-        .filter(|v| v.starts_with(|c: char| c.is_ascii_digit()))
-        .unwrap_or_else(|| "2.1.0".into()) // CodexBar's fallback
-}
-
-/// GET api.anthropic.com/api/oauth/usage. Rate limited per account: while a 429's
-/// Retry-After is pending, skip requests (as CodexBar).
-pub struct Claude {
-    cache: Cache,
-    not_before: f64,
-    last_refresh: Option<Instant>,
-    ua: String,
-}
-
-impl Claude {
-    const REFRESH_EVERY: Duration = Duration::from_secs(1800);
-
-    pub fn new(cache: Cache) -> Self {
-        let not_before = cache.not_before("Claude");
-        Claude { cache, not_before, last_refresh: None, ua: format!("claude-code/{}", claude_version()) }
-    }
-
-    pub fn not_before(&self) -> f64 {
-        self.not_before
-    }
-
-    fn get(&self) -> Result<Reply> {
-        let creds: Value = serde_json::from_slice(&std::fs::read(home().join(r".claude\.credentials.json"))?)?;
-        let tok = creds["claudeAiOauth"]["accessToken"].as_str().context("no Claude access token")?;
-        send(agent()
-            .get("https://api.anthropic.com/api/oauth/usage")
-            .header("Authorization", format!("Bearer {tok}"))
-            .header("anthropic-beta", "oauth-2025-04-20")
-            .header("Accept", "application/json")
-            .header("User-Agent", &self.ua))
-    }
-
-    /// Let Claude Code renew its own expired token (we never write its credentials):
-    /// `claude auth status` checks the login without calling a model.
-    fn delegate_refresh(&mut self) -> bool {
-        if self.last_refresh.is_some_and(|t| t.elapsed() < Self::REFRESH_EVERY) {
-            return false;
-        }
-        self.last_refresh = Some(Instant::now());
-        claude_command(&["auth", "status"])
-            .output()
-            .is_ok()
-    }
-
-    pub fn fetch(&mut self) -> Result<Usage> {
-        if now() < self.not_before {
-            return Err(RateLimited(self.not_before).into());
-        }
-        let mut r = self.get()?;
-        if r.status == 401 && self.delegate_refresh() {
-            r = self.get()?; // the token file may have been renewed
-        }
-        match r.status {
-            200 => {}
-            429 => {
-                self.not_before = now() + r.retry_after.unwrap_or(300.0);
-                self.cache.set_not_before("Claude", self.not_before);
-                return Err(RateLimited(self.not_before).into());
-            }
-            s => return Err(HttpStatus(s).into()),
-        }
-        let (five, week) = (&r.body["five_hour"], &r.body["seven_day"]);
-        Ok(Usage {
-            session: five["utilization"].as_f64(),
-            session_reset: iso(&five["resets_at"]),
-            weekly: week["utilization"].as_f64(),
-            weekly_reset: iso(&week["resets_at"]),
-            source: "api".into(),
-            plan: claude_plan(),
-        })
     }
 }
 

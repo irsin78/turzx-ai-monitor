@@ -125,8 +125,8 @@ The dashboard reads the login each tool already stores on your PC and asks the s
 endpoints those tools and [CodexBar](https://github.com/steipete/CodexBar) use. Nothing is sent
 anywhere else, and credentials are only read, never written.
 
-- **Claude**: Claude Code's OAuth usage endpoint, every 15 minutes (it rate-limits hard). When it
-  fails, the `/usage` screen of Claude Code is read instead, every 5 minutes, until the API works again.
+- **Claude**: the `/usage` screen of Claude Code, every 5 minutes (the numbers Claude Code itself
+  shows; the OAuth usage endpoint was seen answering with hours-old numbers).
 - **Codex**: ChatGPT's usage endpoint with the Codex CLI login, every 5 minutes.
 - **Antigravity**: Google's Cloud Code quota endpoint with the Antigravity login, every 5 minutes.
 

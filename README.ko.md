@@ -74,8 +74,8 @@ turzx-dashboard run                     # 설치 없이 실행
 각 도구가 이 PC에 저장해 둔 로그인 정보를 읽어, 그 도구들과 [CodexBar](https://github.com/steipete/CodexBar)가
 쓰는 사용량 엔드포인트에 묻습니다. 다른 곳으로 보내는 정보는 없고, 로그인 정보는 읽기만 합니다.
 
-- **Claude**: Claude Code의 사용량 API를 15분마다(요청 제한이 엄격함). 실패하면 API가 다시 될 때까지 Claude
-  Code의 `/usage` 화면을 5분마다 읽습니다.
+- **Claude**: Claude Code의 `/usage` 화면을 5분마다 읽습니다(Claude Code가 직접 보여주는 값. 사용량 API는 몇 시간
+  지난 값을 돌려주는 경우가 있었음).
 - **Codex**: Codex CLI 로그인으로 ChatGPT 사용량 API를 5분마다
 - **Antigravity**: Antigravity 로그인으로 Google Cloud Code 할당량 API를 5분마다
 
