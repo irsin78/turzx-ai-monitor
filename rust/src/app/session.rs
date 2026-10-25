@@ -20,6 +20,9 @@ static END_SESSION: OnceLock<Sender<EndSession>> = OnceLock::new();
 /// The monitors are off (GUID_CONSOLE_DISPLAY_STATE; dimmed counts as on).
 static DISPLAY_OFF: AtomicBool = AtomicBool::new(false);
 
+/// Windows asked whether the session may end (shutdown, restart, logoff are coming).
+pub(super) static QUERY_END: AtomicBool = AtomicBool::new(false);
+
 /// Hidden top-level window that receives WM_ENDSESSION (a windowless process gets no notice).
 pub(super) fn watch_end_session() -> Receiver<EndSession> {
     use windows::core::w;
@@ -40,7 +43,10 @@ pub(super) fn watch_end_session() -> Receiver<EndSession> {
                 }
                 LRESULT(1)
             }
-            WM_QUERYENDSESSION => LRESULT(1),
+            WM_QUERYENDSESSION => {
+                QUERY_END.store(true, Ordering::Relaxed);
+                LRESULT(1)
+            }
             WM_ENDSESSION if wp.0 != 0 => {
                 // the process may be killed once this returns: wait until the frame is sent
                 let (ack, done) = mpsc::channel();

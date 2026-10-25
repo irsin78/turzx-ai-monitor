@@ -41,18 +41,33 @@ pub(super) fn quit_requested() -> bool {
     quit_file().exists()
 }
 
-/// A job that takes the worker (and whatever it starts) down with the supervisor, so stopping the
-/// scheduled task (which ends only the supervisor) leaves nothing behind holding the panel.
-fn kill_with_me() -> Option<windows::Win32::Foundation::HANDLE> {
-    use windows::Win32::System::JobObjects::*;
-    unsafe {
-        let job = CreateJobObjectW(None, None).ok()?;
-        let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        let size = std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32;
-        SetInformationJobObject(job, JobObjectExtendedLimitInformation, &info as *const _ as *const _, size).ok()?;
-        Some(job)
-    }
+/// Set in the worker when its supervisor is gone (the scheduled task was stopped, for an
+/// update): the frame loop then exits between two frames.
+pub static PARENT_GONE: AtomicBool = AtomicBool::new(false);
+
+/// Worker: end when the supervisor ends, so stopping the scheduled task (which ends only the
+/// supervisor) leaves nothing behind holding the panel. Not while Windows ends the session:
+/// it ends the windowless supervisor first, and the worker still has the standby screen or the
+/// panel's own video to start (a job object that killed the worker with it did exactly that).
+pub(super) fn watch_parent() {
+    use windows::Win32::System::Threading::{OpenProcess, WaitForSingleObject, INFINITE, PROCESS_SYNCHRONIZE};
+    let Some(pid) = std::env::var("TURZX_SUPERVISOR").ok().and_then(|p| p.parse::<u32>().ok()) else { return };
+    thread::Builder::new()
+        .name("parent".into())
+        .spawn(move || unsafe {
+            let Ok(h) = OpenProcess(PROCESS_SYNCHRONIZE, false, pid) else { return };
+            WaitForSingleObject(h, INFINITE);
+            // give Windows' session-end messages time to arrive when it is shutting down
+            thread::sleep(Duration::from_secs(3));
+            if super::session::QUERY_END.load(Ordering::Relaxed) || ENDING.load(Ordering::Relaxed) {
+                return;
+            }
+            log::info!("supervisor gone: stopping");
+            PARENT_GONE.store(true, Ordering::Relaxed);
+            thread::sleep(Duration::from_secs(10));
+            std::process::exit(0); // the frame loop did not get there
+        })
+        .expect("spawn thread");
 }
 
 pub fn supervise() -> ! {
@@ -60,18 +75,11 @@ pub fn supervise() -> ! {
     let ending = unsafe { CreateEventW(None, true, false, ENDING_EVENT) }.ok();
     let is_ending = || ending.is_some_and(|h| unsafe { WaitForSingleObject(h, 0) }.0 == 0);
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let job = kill_with_me();
     let mut restarts = 0u32;
     loop {
         let started = Instant::now();
         let status = std::env::current_exe().and_then(|exe| {
-            let mut child = std::process::Command::new(exe).args(&args).arg("--worker").spawn()?;
-            if let Some(job) = job {
-                use std::os::windows::io::AsRawHandle;
-                unsafe {
-                    let _ = windows::Win32::System::JobObjects::AssignProcessToJobObject(job, windows::Win32::Foundation::HANDLE(child.as_raw_handle()));
-                }
-            }
+            let mut child = std::process::Command::new(exe).args(&args).arg("--worker").env("TURZX_SUPERVISOR", std::process::id().to_string()).spawn()?;
             child.wait()
         });
         let ran = started.elapsed();

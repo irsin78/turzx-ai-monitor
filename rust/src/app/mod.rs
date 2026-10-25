@@ -93,6 +93,7 @@ pub fn run(ai_enabled: bool) -> ! {
     let mut perf = perf::Perf::default();
     let mut intended: Option<Instant> = None; // when this frame was meant to start
     crate::offline::start();
+    supervisor::watch_parent();
     let mut upload: Option<crate::offline::Upload> = None;
     loop {
         let t = Instant::now();
@@ -220,6 +221,9 @@ pub fn run(ai_enabled: bool) -> ! {
         }
         // nothing is on its way to the panel here: the place to stop
         if crate::config::RESTART.load(std::sync::atomic::Ordering::Relaxed) {
+            std::process::exit(0);
+        }
+        if supervisor::PARENT_GONE.load(std::sync::atomic::Ordering::Relaxed) {
             std::process::exit(0);
         }
         if supervisor::quit_requested() {
