@@ -25,17 +25,48 @@ pub struct Slide {
     pub image: Pixmap,
 }
 
-/// The parts that stay the same for the whole video: background, date and calendar, credit.
-pub fn offline_base(now: &DateTime<Local>) -> Canvas {
+/// The parts that stay the same for the whole video: background, date and calendar, today's
+/// and tomorrow's weather, credit.
+pub fn offline_base(now: &DateTime<Local>, weather: Option<&crate::sources::weather::Weather>) -> Canvas {
     let mut cv = Canvas::background();
     let t = i18n::get();
     let (x, w) = (48.0, LEFT as f32 - 96.0);
     let date = now.format_localized(t.date, t.locale).to_string();
     let f = fit_ko(&cv, &date, &[34.0, 30.0, 26.0, 22.0], false, w);
     cv.text(x, 46.0, &date, f, INK);
-    draw_calendar(&mut cv, now, x, 128.0, w);
-    cv.text(x, 436.0, "Movies: TMDB", ko(14.0, false), FAINT);
+    draw_calendar(&mut cv, now, x, 116.0, w);
+    if let Some(wt) = weather {
+        let today = crate::sources::weather::Forecast { code: wt.code, t_min: wt.t_min, t_max: wt.t_max, rain_prob: wt.rain_prob };
+        draw_day(&mut cv, x, 350.0, w / 2.0 - 12.0, t.today, &today);
+        if let Some(tm) = &wt.tomorrow {
+            draw_day(&mut cv, x + w / 2.0 + 12.0, 350.0, w / 2.0 - 12.0, t.tomorrow, tm);
+        }
+    }
+    cv.text(x, 452.0, "Movies: TMDB", ko(12.0, false), FAINT);
     cv
+}
+
+/// One day's forecast in `width` px: heading, icon, weather, low / high and rain.
+fn draw_day(cv: &mut Canvas, x: f32, y: f32, width: f32, heading: &str, d: &crate::sources::weather::Forecast) {
+    let s = i18n::get();
+    if s.tomorrow_caps {
+        cv.caps(x, y, heading, 13.0, Some(MUTED), 2.0, false);
+    } else {
+        cv.text(x, y - 3.0, heading, ko(15.0, false), MUTED);
+    }
+    weather_icon(cv, x + 22.0, y + 52.0, wx::icon(d.code, false), 0.42);
+    let tx = x + 54.0;
+    let label = s.weather_label(d.code);
+    cv.text(tx, y + 24.0, label, fit_ko(cv, label, &[17.0, 16.0, 15.0, 14.0, 13.0], false, width - 54.0), INK);
+    let dg = |c: f64| format!("{:.0}°", deg(c));
+    let temps = format!("{} / {}", dg(d.t_min), dg(d.t_max));
+    let tf = num(19.0, Face::Num);
+    cv.text(tx, y + 50.0, &temps, tf, SOFT);
+    if let Some(p) = d.rain_prob {
+        let rx = tx + cv.text_len(&temps, tf) + 10.0;
+        let rain = fill(s.rain, p);
+        cv.text(rx, y + 52.0, &rain, fit_ko(cv, &rain, &[16.0, 15.0, 14.0, 13.0], false, x + width - rx), MUTED);
+    }
 }
 
 /// Seconds of video for `n` movies.
@@ -141,8 +172,8 @@ pub struct Clip {
 }
 
 /// Everything but the video for one clip: the calendar and the movie's details on the right.
-pub fn clip_base(now: &DateTime<Local>, c: &Clip) -> Canvas {
-    let mut cv = offline_base(now);
+pub fn clip_base(now: &DateTime<Local>, weather: Option<&crate::sources::weather::Weather>, c: &Clip) -> Canvas {
+    let mut cv = offline_base(now, weather);
     let x = (LEFT + CLIP_W) as f32 + 34.0;
     let w = (W - LEFT - CLIP_W) as f32 - 68.0;
     let mut y = 52.0;

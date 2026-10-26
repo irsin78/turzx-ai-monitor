@@ -234,14 +234,20 @@ fn fetch() {
 /// folder, or else this week's movies as stills (TMDB, needs `[offline] tmdb_key`).
 pub fn build(now: &chrono::DateTime<chrono::Local>) -> anyhow::Result<Vec<u8>> {
     fetch();
+    // today's and tomorrow's forecast under the calendar (left out if the weather is unreachable)
+    let weather = crate::sources::weather::fetch().inspect_err(|e| log::warn!("offline video weather: {e:#}")).ok();
     let clips = clips();
     if !clips.is_empty() {
-        return build_clips(now, &clips);
+        return build_clips(now, weather.as_ref(), &clips);
     }
-    build_stills(now)
+    build_stills(now, weather.as_ref())
 }
 
-fn build_clips(now: &chrono::DateTime<chrono::Local>, clips: &[(PathBuf, crate::ui::Clip)]) -> anyhow::Result<Vec<u8>> {
+fn build_clips(
+    now: &chrono::DateTime<chrono::Local>,
+    weather: Option<&crate::sources::weather::Weather>,
+    clips: &[(PathBuf, crate::ui::Clip)],
+) -> anyhow::Result<Vec<u8>> {
     let mut enc = encode::H264::new(FPS, 4_000_000, crate::config::get().rotation == 180)?;
     let fade = crate::ui::CLIP_FADE_S as f64;
     let mut used = 0;
@@ -254,7 +260,7 @@ fn build_clips(now: &chrono::DateTime<chrono::Local>, clips: &[(PathBuf, crate::
             }
         };
         let len = video.duration().unwrap_or(CLIP_MAX_S).min(CLIP_MAX_S);
-        let base = crate::ui::clip_base(now, info);
+        let base = crate::ui::clip_base(now, weather, info);
         let Some((start, mut cur)) = video.next()? else { continue }; // start: the first frame's time stamp
         let mut ahead = video.next()?;
         let frames = (len * FPS as f64) as u32;
@@ -277,7 +283,7 @@ fn build_clips(now: &chrono::DateTime<chrono::Local>, clips: &[(PathBuf, crate::
     enc.finish()
 }
 
-fn build_stills(now: &chrono::DateTime<chrono::Local>) -> anyhow::Result<Vec<u8>> {
+fn build_stills(now: &chrono::DateTime<chrono::Local>, weather: Option<&crate::sources::weather::Weather>) -> anyhow::Result<Vec<u8>> {
     use crate::sources::movies;
     let key = crate::config::get().offline.tmdb_key.trim().to_string();
     anyhow::ensure!(!key.is_empty(), "no TMDB key in the settings");
@@ -292,7 +298,7 @@ fn build_stills(now: &chrono::DateTime<chrono::Local>) -> anyhow::Result<Vec<u8>
         })
         .collect();
     anyhow::ensure!(!slides.is_empty(), "no movie images");
-    let base = crate::ui::offline_base(now);
+    let base = crate::ui::offline_base(now, weather);
     let mut enc = encode::H264::new(FPS, 4_000_000, crate::config::get().rotation == 180)?;
     let frames = (crate::ui::offline_len(slides.len()) * FPS as f32).round() as u32;
     for f in 0..frames {

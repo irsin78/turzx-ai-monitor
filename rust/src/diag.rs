@@ -327,7 +327,8 @@ pub fn run(cmd: &str) -> Result<()> {
                 .into_iter()
                 .filter_map(|m| Some(ui::Slide { image: crate::sources::movies::backdrop(&m).ok()?, title: m.title, now_playing: m.now_playing, release: m.release, rating: m.rating, overview: m.overview }))
                 .collect();
-            let base = ui::offline_base(&now);
+            let weather = crate::sources::weather::fetch().ok();
+            let base = ui::offline_base(&now, weather.as_ref());
             for (name, t) in [("offline_a.png", 3.0), ("offline_b.png", 5.7), ("offline_c.png", 9.0)] {
                 ui::offline_frame(&base, &slides, t).save_png(name)?;
             }
