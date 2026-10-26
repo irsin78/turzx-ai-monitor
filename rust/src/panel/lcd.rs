@@ -105,6 +105,9 @@ impl Lcd {
                 }
             }
         };
+        if let Err(e) = lcd.stop_local() {
+            log::warn!("could not stop the panel's own playback: {e:#}");
+        }
         Ok(lcd)
     }
 
@@ -276,8 +279,17 @@ impl Lcd {
         Ok(())
     }
 
+    /// Stop the panel's own playback and wait until it has: the first frame after a night of
+    /// playing the off-time video would otherwise stop it inside the frame's command, answering
+    /// seconds late, and the late answer puts the panel out of step.
     pub fn stop_local(&mut self) -> Result<()> {
-        self.command(CMD_STOP_LOCAL)?;
+        self.command_wait(CMD_STOP_LOCAL, &[], Duration::from_secs(20))?;
+        for _ in 0..20 {
+            if self.local_state()? == 0 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
         Ok(())
     }
 
