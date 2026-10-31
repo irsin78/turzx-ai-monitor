@@ -2,14 +2,15 @@
 
 use super::*;
 
-/// Blocky bar (Minecraft style): each block is 100/segments %, the last one fills partially.
+/// Blocky bar (Minecraft style): each block is 100/segments %, flat colour; the last one is
+/// partly full, emptying from the top.
 pub(super) fn segmented_bar(cv: &mut Canvas, x: f32, y: f32, w: f32, h: f32, pct: f64, color: Rgb) {
-    segmented_fill(cv, x, y, w, h, 100.0, RULE, false);
-    segmented_fill(cv, x, y, w, h, pct, color, true);
+    segmented_fill(cv, x, y, w, h, 100.0, RULE);
+    segmented_fill(cv, x, y, w, h, pct, color);
 }
 
 /// The filled blocks of `segmented_bar` only (so a second bar can go on top of the first).
-fn segmented_fill(cv: &mut Canvas, x: f32, y: f32, w: f32, h: f32, pct: f64, color: Rgb, edge: bool) {
+fn segmented_fill(cv: &mut Canvas, x: f32, y: f32, w: f32, h: f32, pct: f64, color: Rgb) {
     let (segments, gap) = (10usize, 3.0);
     let seg_w = (w - gap * (segments - 1) as f32) / segments as f32;
     let filled = (pct.clamp(0.0, 100.0) / 100.0 * segments as f64) as f32;
@@ -17,11 +18,7 @@ fn segmented_fill(cv: &mut Canvas, x: f32, y: f32, w: f32, h: f32, pct: f64, col
         let sx = x + i as f32 * (seg_w + gap);
         let part = (filled - i as f32).clamp(0.0, 1.0);
         if part > 0.0 {
-            cv.rect(sx, y, sx + (seg_w * part).max(2.0) - 1.0, y + h - 1.0, color);
-            if edge && part >= 1.0 {
-                // light top edge, like a pixel-art block
-                cv.line(&[(sx, y), (sx + seg_w - 1.0, y)], 2.0, mix([255, 255, 255], color, 0.35));
-            }
+            cv.rect(sx, y + h - (h * part).max(2.0), sx + seg_w - 1.0, y + h - 1.0, color);
         }
     }
 }
@@ -163,28 +160,28 @@ pub(super) fn draw_ai(cv: &mut Canvas, st: &State, x: f32, top: f32) {
             let refilled = reset.is_some_and(|r| r <= epoch_now());
             let pct = if refilled { 0.0 } else { pct };
             let left = (100.0 - pct).max(0.0); // show what is left, not what is used
-            let val = shown_left(pct).to_string();
-            cv.text(cx, y, &val, f_val, if left <= 10.0 { HOT } else { INK });
+            // a second limit in the same window (Argon) comes first: "88%/99%"
             let f_pct = num(16.0, Face::NumSemi);
-            let px = cx + cv.text_len(&val, f_val) + 4.0;
-            cv.text(px, y + 12.0, "%", f_pct, MUTED);
+            let mut tx = cx;
+            for (k, used) in extra.into_iter().chain([pct]).enumerate() {
+                if k > 0 {
+                    cv.text(tx, y, "/", f_val, MUTED);
+                    tx += cv.text_len("/", f_val) + 4.0;
+                }
+                let val = shown_left(used).to_string();
+                cv.text(tx, y, &val, f_val, if used >= 90.0 { HOT } else { INK });
+                tx += cv.text_len(&val, f_val) + 4.0;
+                cv.text(tx, y + 12.0, "%", f_pct, MUTED);
+                tx += cv.text_len("%", f_pct) + 6.0;
+            }
             segmented_bar(cv, cx, y + 40.0, bw, 12.0, left, color);
-            // a second limit in the same window (Argon): "/90%" smaller, its bar the same blocks
-            // in a darker shade; the shorter of the two goes on top so both show
+            // the second limit's bar: the same blocks in a deep, saturated blue (only Antigravity
+            // has one; mixing in black made a greyish navy), the shorter of the two on top
             if let Some(e) = extra {
-                let e_left = (100.0 - e).max(0.0);
-                let f_extra = num(20.0, Face::NumSemi);
-                let label = format!("/{}", shown_left(e));
-                let ex = px + cv.text_len("%", f_pct) + 4.0;
-                cv.text(ex, y + 8.0, &label, f_extra, if e_left <= 10.0 { HOT } else { SOFT });
-                cv.text(ex + cv.text_len(&label, f_extra) + 3.0, y + 12.0, "%", f_pct, MUTED);
-                // a deep, saturated blue (only Antigravity has a second limit); mixing in black
-                // made a greyish navy
-                let dark = [20, 60, 210];
-                let mut bars = [(left, color), (e_left, dark)];
+                let mut bars = [(left, color), ((100.0 - e).max(0.0), [20, 60, 210])];
                 bars.sort_by(|a, b| b.0.total_cmp(&a.0));
                 for (pct, c) in bars {
-                    segmented_fill(cv, cx, y + 40.0, bw, 12.0, pct, c, true);
+                    segmented_fill(cv, cx, y + 40.0, bw, 12.0, pct, c);
                 }
             }
             let when = if refilled { i18n::get().refilled.to_string() } else { fmt_left(reset) };
