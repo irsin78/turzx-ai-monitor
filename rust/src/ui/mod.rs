@@ -21,7 +21,7 @@ mod weather;
 pub use canvas::Canvas;
 pub use offline::{clip_base, clip_frame, offline_base, offline_frame, offline_len, Clip, Slide, CLIP_FADE_S};
 pub use standby::{standby, standby_page};
-pub use usage::mascot_areas;
+pub use usage::{agent_bubbles, draw_agent_bubble, mascot_areas, Bubble};
 
 use canvas::*;
 use clock::*;

@@ -362,7 +362,17 @@ pub fn run(cmd: &str) -> Result<()> {
             ] {
                 st.agents.apply(Event { source, event: status, session: session.into(), project: project.into() }, now);
             }
-            ui::render(&st, chrono::Local::now()).save_png("preview_agent.png")?;
+            let mut cv = ui::render(&st, chrono::Local::now());
+            let areas = ui::mascot_areas();
+            let mut m = mascot::Mascots::new(&areas);
+            m.update(0.5, &areas);
+            m.draw(cv.pixmap_mut(), &areas);
+            for (head, b) in m.heads(&areas).into_iter().zip(&ui::agent_bubbles(&st)) {
+                if let Some(b) = b {
+                    ui::draw_agent_bubble(&mut cv, head, b, 1300.0, 1520.0);
+                }
+            }
+            cv.save_png("preview_agent.png")?;
             println!("saved preview_agent.png");
         }
         "test-pattern" => {

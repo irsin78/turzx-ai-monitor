@@ -21,27 +21,56 @@ pub(super) fn segmented_bar(cv: &mut Canvas, x: f32, y: f32, w: f32, h: f32, pct
     }
 }
 
-/// The status bubble at (`x`, `y`), `w` wide: what (waiting / done, "+N" more sessions) and the
-/// project folder, with a tail down towards the mascot.
-fn draw_agent_bubble(cv: &mut Canvas, x: f32, y: f32, w: f32, s: &crate::agent_status::Summary<'_>) {
-    let waiting = s.status == crate::agent_status::Status::Waiting;
-    let color = if waiting { WARN } else { [125, 221, 180] };
-    let (h, bg) = (30.0, [30, 42, 65]);
-    cv.rect(x, y, x + w, y + h, bg);
-    cv.rect(x, y, x + 2.0, y + h, color);
-    let tx = x + w / 2.0;
-    cv.polygon(&[(tx - 6.0, y + h), (tx + 6.0, y + h), (tx, y + h + 6.0)], bg);
+/// What a status bubble says (taken from the state when the dashboard is redrawn).
+pub struct Bubble {
+    waiting: bool,
+    label: String,
+    project: String,
+}
+
+/// The bubbles for the Claude and Codex mascots: a session done or waiting for the user.
+pub fn agent_bubbles(st: &State) -> [Option<Bubble>; 2] {
+    use crate::agent_status::{Source, Status};
     let t = i18n::get();
-    let more = if s.more > 0 { format!("  +{}", s.more) } else { String::new() };
-    let fb = ko(13.0, true);
-    let label = format!("{}{more}", t.agent[if waiting { 0 } else { 1 }]);
-    cv.text(x + 8.0, y + 1.0, &label, fb, color);
-    let fp = ko(13.0, false);
-    let mut project = s.project.to_string();
-    while !project.is_empty() && cv.text_len(&project, fp) > w - 14.0 {
+    let ai = &config::get().ai;
+    let now = std::time::Instant::now();
+    [(Source::Claude, ai.claude), (Source::Codex, ai.codex)].map(|(src, on)| {
+        let s = st.agents.summary(src, now).filter(|_| on)?;
+        let waiting = s.status == Status::Waiting;
+        let more = if s.more > 0 { format!(" +{}", s.more) } else { String::new() };
+        Some(Bubble { waiting, label: format!("{}{more}", t.agent[if waiting { 0 } else { 1 }]), project: s.project.to_string() })
+    })
+}
+
+/// A small bubble right above a mascot's head (`head`: its top middle), its tail pointing down
+/// at the mascot; kept between `left` and `right`.
+pub fn draw_agent_bubble(cv: &mut Canvas, head: (f32, f32), b: &Bubble, left: f32, right: f32) {
+    let color = if b.waiting { WARN } else { [125, 221, 180] };
+    let fill = [22, 32, 54];
+    let (fl, fp) = (ko(12.0, true), ko(12.0, false));
+    let mut project = b.project.clone();
+    while !project.is_empty() && cv.text_len(&project, fp) > 150.0 {
         project.pop();
     }
-    cv.text(x + 8.0, y + 15.0, &project, fp, INK);
+    let w = cv.text_len(&b.label, fl).max(cv.text_len(&project, fp)) + 14.0;
+    let h = if project.is_empty() { 18.0 } else { 32.0 };
+    let tail = 7.0;
+    let bottom = head.1 - 3.0 - tail;
+    let top = bottom - h;
+    let x = (head.0 - w / 2.0).clamp(left, (right - w).max(left));
+    let tx = head.0.clamp(x + 8.0, x + w - 8.0);
+    let c = 3.0; // cut corners
+    let outline = [
+        (x + c, top), (x + w - c, top), (x + w, top + c), (x + w, bottom - c), (x + w - c, bottom),
+        (tx + 5.0, bottom), (tx, bottom + tail), (tx - 5.0, bottom),
+        (x + c, bottom), (x, bottom - c), (x, top + c), (x + c, top),
+    ];
+    cv.polygon(&outline, fill);
+    cv.line(&outline, 1.5, color);
+    cv.text(x + 7.0, top + 1.0, &b.label, fl, color);
+    if !project.is_empty() {
+        cv.text(x + 7.0, top + 15.0, &project, fp, INK);
+    }
 }
 
 /// An outlined ticket (notched sides, perforation) and `count` after it, if it fits before `right`.
@@ -99,12 +128,7 @@ pub(super) fn draw_ai(cv: &mut Canvas, st: &State, x: f32, top: f32) {
         if let Some(n) = u.map(|u| u.coupons).filter(|&n| n > 0) {
             draw_coupons(cv, px, y + 16.0, n, color, c1 - 10.0);
         }
-        // a Claude Code / Codex session done or waiting for the user: a bubble over the mascot,
-        // covering the name line
-        let source = [Some(crate::agent_status::Source::Claude), Some(crate::agent_status::Source::Codex), None][i];
-        if let Some(status) = source.and_then(|src| st.agents.summary(src, std::time::Instant::now())) {
-            draw_agent_bubble(cv, x + 12.0, y - 2.0, (c1 - 18.0) - (x + 12.0), &status);
-        }
+
         let err = st.ai_err.get(name);
         if let (Some(e), None) = (err, u) {
             cv.text(c1, y + 8.0, &err_text(e), ko(18.0, false), WARN);

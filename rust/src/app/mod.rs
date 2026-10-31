@@ -81,6 +81,7 @@ pub fn run(ai_enabled: bool) -> ! {
     let mut drawn_at: Option<i64> = None; // second of the last full redraw
     let mut work: Option<ui::Canvas> = None;
     let mut band_backup: Vec<u8> = Vec::new(); // the mascot band as redrawn, without mascots
+    let mut bubbles: [Option<ui::Bubble>; 2] = [None, None];
     let mut last_tick = Instant::now();
     // `[debug] perf = true`: frame timing in the log every 10 s
     let perf_on = crate::config::get().debug.perf;
@@ -162,6 +163,7 @@ pub fn run(ai_enabled: bool) -> ! {
                     let fresh = drawn_at != Some(now.timestamp());
                     if fresh {
                         let snapshot = st.lock().unwrap().clone(); // render without holding the lock
+                        bubbles = ui::agent_bubbles(&snapshot);
                         let cv = work.insert(ui::render(&snapshot, now));
                         cv.save_columns(band_cols.clone(), &mut band_backup);
                         drawn_at = Some(now.timestamp());
@@ -172,6 +174,12 @@ pub fn run(ai_enabled: bool) -> ! {
                     }
                     mascots.update(dt, &areas);
                     mascots.draw(cv.pixmap_mut(), &areas);
+                    // status bubbles ride above the mascots' heads (inside the re-encoded band)
+                    for (head, b) in mascots.heads(&areas).into_iter().zip(&bubbles) {
+                        if let Some(b) = b {
+                            ui::draw_agent_bubble(cv, head, b, band_px.0 + 2.0, band_px.1 - 2.0);
+                        }
+                    }
                     enc.encode(cv.pixmap(), if fresh { 0..jpeg::BANDS } else { band.clone() });
                     perf.render(fresh, t.elapsed());
                     let frame = enc.frame();
