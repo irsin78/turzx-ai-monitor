@@ -539,6 +539,26 @@ impl Antigravity {
         Ok(r.body)
     }
 
+    fn quota(&mut self, token: &str) -> Result<Value> {
+        self.post(token, "retrieveUserQuotaSummary", json!({"project": self.project}))
+    }
+
+    /// The quota summary as the server sends it (no credentials in it), for `diag agy-raw`.
+    pub fn quota_raw(&mut self) -> Result<Value> {
+        self.fetch()?; // signs in and finds the project
+        let token = self.auth()?;
+        let summary = self.quota(&token)?;
+        // per-model quota: only names and quota numbers are kept
+        let models = self.post(&token, "fetchAvailableModels", json!({"project": self.project})).unwrap_or_default();
+        let quota: serde_json::Map<String, Value> = models["models"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .map(|(name, m)| (name.clone(), json!({"displayName": m["displayName"], "quotaInfo": m["quotaInfo"]})))
+            .collect();
+        Ok(json!({"summary": summary, "models": quota}))
+    }
+
     pub fn fetch(&mut self) -> Result<Usage> {
         let token = self.auth()?;
         if self.project.is_none() {
@@ -551,7 +571,7 @@ impl Antigravity {
                 "paidTierName": plan_field(&j["paidTier"], "name"),
             });
         }
-        let j = self.post(&token, "retrieveUserQuotaSummary", json!({"project": self.project}))?;
+        let j = self.quota(&token)?;
         // Two groups (Gemini, Claude/GPT) with separate limits: show the most used one per window
         let mut u = Usage { source: "api".into(), plan: self.plan.clone(), ..Default::default() };
         for g in j["groups"].as_array().into_iter().flatten() {
@@ -565,6 +585,20 @@ impl Antigravity {
                 if val.is_none_or(|v| pct > v) {
                     *val = Some(pct);
                     *reset = iso(&b["resetTime"]);
+                }
+            }
+        }
+        // The summary has been seen leaving out the Gemini group; each model's own quota still
+        // has it. A reset within 6 hours is the 5-hour window, a later one the weekly.
+        if let Ok(models) = self.post(&token, "fetchAvailableModels", json!({"project": self.project})) {
+            for m in models["models"].as_object().into_iter().flat_map(|o| o.values()) {
+                let q = &m["quotaInfo"];
+                let (Some(left), Some(reset)) = (q["remainingFraction"].as_f64(), iso(&q["resetTime"])) else { continue };
+                let pct = (1.0 - left.clamp(0.0, 1.0)) * 100.0;
+                let (val, at) = if reset - now() < 6.0 * 3600.0 { (&mut u.session, &mut u.session_reset) } else { (&mut u.weekly, &mut u.weekly_reset) };
+                if val.is_none_or(|v| pct > v) {
+                    *val = Some(pct);
+                    *at = Some(reset);
                 }
             }
         }

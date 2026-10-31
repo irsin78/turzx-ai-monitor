@@ -9,7 +9,7 @@ use crate::sensors::{self as hw};
 use crate::sources::{ai, weather};
 use crate::{mascot, state, ui};
 
-pub const COMMANDS: &str = "usb | sensors | weather | claude-cli | layout | standby | mascots | jpeg-check | profile | fps-test | test-pattern | sd | sd-put | sd-play | sd-stop | encode-test | offline | sd-rm | decode-test | agent-status";
+pub const COMMANDS: &str = "usb | sensors | weather | claude-cli | layout | standby | mascots | jpeg-check | profile | fps-test | test-pattern | sd | sd-put | sd-play | sd-stop | encode-test | offline | sd-rm | decode-test | agent-status | agy-raw";
 
 /// Four vertical quarter bands (red, green, blue, white).
 fn test_bands() -> Vec<u8> {
@@ -374,6 +374,13 @@ pub fn run(cmd: &str) -> Result<()> {
             }
             cv.save_png("preview_agent.png")?;
             println!("saved preview_agent.png");
+        }
+        "agy-raw" => {
+            // Antigravity's quota summary as sent (groups and buckets; no credentials)
+            let mut agy = ai::Antigravity::new();
+            let j = agy.quota_raw()?;
+            println!("{}", serde_json::to_string_pretty(&j)?);
+            println!("{:?}", agy.fetch()?);
         }
         "test-pattern" => {
             let mut lcd = lcd::Lcd::open()?;
