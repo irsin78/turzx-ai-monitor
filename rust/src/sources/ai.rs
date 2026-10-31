@@ -31,6 +31,9 @@ pub struct Usage {
     /// Codex: rate-limit reset credits ("refill coupons") left
     #[serde(default)]
     pub coupons: u64,
+    /// A second weekly limit inside the plan, percent used (Antigravity: Gemini 4 Argon)
+    #[serde(default)]
+    pub weekly_extra: Option<f64>,
 }
 
 /// Claude's plan from its login file: only the two plan fields are kept, never the tokens.
@@ -234,7 +237,7 @@ pub fn parse_usage_screen(text: &str, now_utc: chrono::DateTime<chrono::Utc>) ->
     };
     let (session, session_reset) = section("Current session");
     let (weekly, weekly_reset) = section("Current week (all models)");
-    Usage { session, session_reset, weekly, weekly_reset, source: "cli".into(), plan: Value::Null, coupons: 0 }
+    Usage { session, session_reset, weekly, weekly_reset, source: "cli".into(), plan: Value::Null, ..Default::default() }
 }
 
 /// "2:39am" (next occurrence) or "Oct 7, 12:59am" (this year, else next) -> epoch seconds.
@@ -397,6 +400,7 @@ pub fn codex() -> Result<Usage> {
         source: "api".into(),
         plan: json!({"plan_type": plan_field(&r.body, "plan_type")}),
         coupons: r.body["rate_limit_reset_credits"]["available_count"].as_u64().unwrap_or(0),
+        weekly_extra: None,
     })
 }
 
@@ -612,14 +616,18 @@ impl Antigravity {
         else {
             return false;
         };
+        let used = |b: &Value| (1.0 - b["remaining_fraction"].as_f64().unwrap_or(1.0).clamp(0.0, 1.0)) * 100.0;
         for b in g["buckets"].as_array().into_iter().flatten() {
-            let pct = (1.0 - b["remaining_fraction"].as_f64().unwrap_or(1.0).clamp(0.0, 1.0)) * 100.0;
             match b["window"].as_str() {
-                Some("5h") => (u.session, u.session_reset) = (Some(pct), iso(&b["reset_time"])),
-                Some("weekly") => (u.weekly, u.weekly_reset) = (Some(pct), iso(&b["reset_time"])),
+                Some("5h") => (u.session, u.session_reset) = (Some(used(b)), iso(&b["reset_time"])),
+                Some("weekly") => (u.weekly, u.weekly_reset) = (Some(used(b)), iso(&b["reset_time"])),
                 _ => {}
             }
         }
+        // Gemini 4 Argon has its own weekly limit on paid Pro plans (its own group)
+        u.weekly_extra = groups.iter().flat_map(|g| g["buckets"].as_array().into_iter().flatten())
+            .find(|b| b["window"] == "weekly" && b["id"].as_str().is_some_and(|id| id.contains("argon")))
+            .map(used);
         u.session.is_some() || u.weekly.is_some()
     }
 
@@ -737,6 +745,7 @@ mod tests {
         assert!(Antigravity::from_cli(&groups, &mut u));
         assert!((u.session.unwrap() - 25.0).abs() < 1e-6 && (u.weekly.unwrap() - 1.0).abs() < 1e-6);
         assert_eq!(u.weekly_reset, iso(&json!("2026-11-07T12:03:38Z")));
+        assert!((u.weekly_extra.unwrap() - 50.0).abs() < 1e-6);
         assert!(!Antigravity::from_cli(&json!("error"), &mut Usage::default()));
     }
 
