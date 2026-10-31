@@ -4,35 +4,24 @@ use super::*;
 
 /// Blocky bar (Minecraft style): each block is 100/segments %, the last one fills partially.
 pub(super) fn segmented_bar(cv: &mut Canvas, x: f32, y: f32, w: f32, h: f32, pct: f64, color: Rgb) {
+    segmented_fill(cv, x, y, w, h, 100.0, RULE, false);
+    segmented_fill(cv, x, y, w, h, pct, color, true);
+}
+
+/// The filled blocks of `segmented_bar` only (so a second bar can go on top of the first).
+fn segmented_fill(cv: &mut Canvas, x: f32, y: f32, w: f32, h: f32, pct: f64, color: Rgb, edge: bool) {
     let (segments, gap) = (10usize, 3.0);
     let seg_w = (w - gap * (segments - 1) as f32) / segments as f32;
     let filled = (pct.clamp(0.0, 100.0) / 100.0 * segments as f64) as f32;
     for i in 0..segments {
         let sx = x + i as f32 * (seg_w + gap);
-        cv.rect(sx, y, sx + seg_w - 1.0, y + h - 1.0, RULE);
         let part = (filled - i as f32).clamp(0.0, 1.0);
         if part > 0.0 {
             cv.rect(sx, y, sx + (seg_w * part).max(2.0) - 1.0, y + h - 1.0, color);
-            if part >= 1.0 {
+            if edge && part >= 1.0 {
                 // light top edge, like a pixel-art block
                 cv.line(&[(sx, y), (sx + seg_w - 1.0, y)], 2.0, mix([255, 255, 255], color, 0.35));
             }
-        }
-    }
-}
-
-/// Only the filled part, as a thinner strip through the middle of the blocks: a second limit
-/// drawn over `segmented_bar` (same block layout).
-fn segmented_overlay(cv: &mut Canvas, x: f32, y: f32, w: f32, h: f32, pct: f64, color: Rgb) {
-    let (segments, gap) = (10usize, 3.0);
-    let seg_w = (w - gap * (segments - 1) as f32) / segments as f32;
-    let filled = (pct.clamp(0.0, 100.0) / 100.0 * segments as f64) as f32;
-    let (top, bottom) = (y + h * 0.3, y + h * 0.7);
-    for i in 0..segments {
-        let sx = x + i as f32 * (seg_w + gap);
-        let part = (filled - i as f32).clamp(0.0, 1.0);
-        if part > 0.0 {
-            cv.rect(sx, top, sx + (seg_w * part).max(2.0) - 1.0, bottom - 1.0, color);
         }
     }
 }
@@ -180,7 +169,8 @@ pub(super) fn draw_ai(cv: &mut Canvas, st: &State, x: f32, top: f32) {
             let px = cx + cv.text_len(&val, f_val) + 4.0;
             cv.text(px, y + 12.0, "%", f_pct, MUTED);
             segmented_bar(cv, cx, y + 40.0, bw, 12.0, left, color);
-            // a second limit in the same window (Argon): "/90%" smaller, its bar darker on top
+            // a second limit in the same window (Argon): "/90%" smaller, its bar the same blocks
+            // in a darker shade; the shorter of the two goes on top so both show
             if let Some(e) = extra {
                 let e_left = (100.0 - e).max(0.0);
                 let f_extra = num(20.0, Face::NumSemi);
@@ -188,7 +178,12 @@ pub(super) fn draw_ai(cv: &mut Canvas, st: &State, x: f32, top: f32) {
                 let ex = px + cv.text_len("%", f_pct) + 4.0;
                 cv.text(ex, y + 8.0, &label, f_extra, if e_left <= 10.0 { HOT } else { SOFT });
                 cv.text(ex + cv.text_len(&label, f_extra) + 3.0, y + 12.0, "%", f_pct, MUTED);
-                segmented_overlay(cv, cx, y + 40.0, bw, 12.0, e_left, mix([0, 0, 0], color, 0.45));
+                let dark = mix(color, [0, 0, 0], 0.6);
+                let mut bars = [(left, color), (e_left, dark)];
+                bars.sort_by(|a, b| b.0.total_cmp(&a.0));
+                for (pct, c) in bars {
+                    segmented_fill(cv, cx, y + 40.0, bw, 12.0, pct, c, true);
+                }
             }
             let when = if refilled { i18n::get().refilled.to_string() } else { fmt_left(reset) };
             cv.text(cx, y + 58.0, &when, ko(16.0, false), SOFT);
