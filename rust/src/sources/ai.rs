@@ -543,17 +543,116 @@ impl Antigravity {
         self.post(token, "retrieveUserQuotaSummary", json!({"project": self.project}))
     }
 
-    /// The quota summary and per-model quota as the server sends them (no credentials in
-    /// them), for `diag agy-raw`.
+    /// The quota summary and per-model quota as the server sends them, and the CLI's groups
+    /// (no credentials in them), for `diag agy-raw`.
     pub fn quota_raw(&mut self) -> Result<Value> {
-        self.fetch()?; // signs in and finds the project
+        self.load_plan()?; // signs in and finds the project
         let token = self.auth()?;
         let summary = self.quota(&token)?;
         let per_model = self.post(&token, "retrieveUserQuota", json!({"project": self.project})).unwrap_or_default();
-        Ok(json!({"summary": summary, "per_model": per_model["buckets"]}))
+        let cli = Self::cli_usage().unwrap_or_else(|e| json!(e.to_string()));
+        Ok(json!({"summary": summary, "per_model": per_model["buckets"], "cli": cli}))
     }
 
+    /// `agy -p /usage --output-format json`: the groups as the CLI shows them (the API summary
+    /// leaves out the Gemini group). Calls no model; about 6 s. Runs in its own empty folder
+    /// with its own log file, which agy overwrites each run.
+    fn cli_usage() -> Result<Value> {
+        use std::os::windows::process::CommandExt;
+        use std::process::{Command, Stdio};
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let path_dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+        let exe = std::iter::once(local_appdata().join(r"agy\bin\agy.exe"))
+            .chain(path_dirs.iter().map(|d| d.join("agy.exe")))
+            .find(|p| p.is_file())
+            .context("agy CLI not found")?;
+        let work = local_appdata().join(r"TurzxDashboard\agy-probe");
+        std::fs::create_dir_all(&work)?;
+        let mut child = Command::new(exe)
+            .args(["-p", "/usage", "--output-format", "json", "--print-timeout", "40s", "--log-file"])
+            .arg(work.join("agy.log"))
+            .current_dir(&work)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()?;
+        let mut out = child.stdout.take().context("no stdout")?;
+        let reader = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = out.read_to_end(&mut buf);
+            buf
+        });
+        let start = Instant::now();
+        while child.try_wait()?.is_none() {
+            if start.elapsed() > Duration::from_secs(50) {
+                let _ = child.kill();
+                bail!("agy /usage timed out");
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        let j: Value = serde_json::from_slice(&reader.join().unwrap_or_default()).context("agy /usage: not JSON")?;
+        let groups = &j["command"]["data"]["groups"];
+        if !groups.is_array() {
+            bail!("agy /usage: {}", j["status"].as_str().unwrap_or("no quota groups"));
+        }
+        Ok(groups.clone())
+    }
+
+    /// The Gemini group's 5-hour and weekly windows (the Antigravity plan's own quota; the
+    /// Claude/GPT group is what those models use inside Antigravity). Falls back to the first
+    /// group that has either window.
+    fn from_cli(groups: &Value, u: &mut Usage) -> bool {
+        let groups = groups.as_array().map(Vec::as_slice).unwrap_or_default();
+        let has = |g: &&Value, id: &str| g["buckets"].as_array().into_iter().flatten().any(|b| b["id"] == id);
+        let Some(g) = groups
+            .iter()
+            .find(|g| has(g, "gemini-5h") || has(g, "gemini-weekly"))
+            .or_else(|| groups.iter().find(|g| g["buckets"].as_array().into_iter().flatten().any(|b| b["window"] == "5h")))
+        else {
+            return false;
+        };
+        for b in g["buckets"].as_array().into_iter().flatten() {
+            let pct = (1.0 - b["remaining_fraction"].as_f64().unwrap_or(1.0).clamp(0.0, 1.0)) * 100.0;
+            match b["window"].as_str() {
+                Some("5h") => (u.session, u.session_reset) = (Some(pct), iso(&b["reset_time"])),
+                Some("weekly") => (u.weekly, u.weekly_reset) = (Some(pct), iso(&b["reset_time"])),
+                _ => {}
+            }
+        }
+        u.session.is_some() || u.weekly.is_some()
+    }
+
+    /// The CLI's /usage when agy is installed, else the API. The plan name always comes from
+    /// the API (loadCodeAssist).
     pub fn fetch(&mut self) -> Result<Usage> {
+        let plan = self.load_plan();
+        if let Ok(groups) = Self::cli_usage() {
+            let mut u = Usage { source: "cli".into(), plan: self.plan.clone(), ..Default::default() };
+            if Self::from_cli(&groups, &mut u) {
+                return Ok(u);
+            }
+        }
+        plan?;
+        self.fetch_api()
+    }
+
+    fn load_plan(&mut self) -> Result<()> {
+        let token = self.auth()?;
+        if self.project.is_none() {
+            let j = self.post(&token, "loadCodeAssist", json!({"metadata": {"ideType": "ANTIGRAVITY"}}))?;
+            self.project = Some(j["cloudaicompanionProject"].as_str().context("no project")?.to_string());
+            self.plan = json!({
+                "currentTier": plan_field(&j["currentTier"], "id"),
+                "currentTierName": plan_field(&j["currentTier"], "name"),
+                "paidTier": plan_field(&j["paidTier"], "id"),
+                "paidTierName": plan_field(&j["paidTier"], "name"),
+            });
+        }
+        Ok(())
+    }
+
+    fn fetch_api(&mut self) -> Result<Usage> {
         let token = self.auth()?;
         if self.project.is_none() {
             let j = self.post(&token, "loadCodeAssist", json!({"metadata": {"ideType": "ANTIGRAVITY"}}))?;
@@ -620,6 +719,25 @@ mod tests {
         let mut custom = crate::config::PlanLabels::default();
         custom.codex.insert("pro".into(), "Pro 200".into());
         assert_eq!(plan_label_with("Codex", &json!({"plan_type": "pro"}), &custom).as_deref(), Some("Pro 200"));
+    }
+
+    #[test]
+    fn antigravity_cli_uses_gemini_group() {
+        let groups = json!([
+            {"name": "Claude and GPT models", "buckets": [
+                {"id": "3p-weekly", "window": "weekly", "remaining_fraction": 1, "reset_time": "2026-11-07T12:49:22Z"},
+                {"id": "3p-5h", "window": "5h", "remaining_fraction": 1, "reset_time": "2026-10-31T17:49:22Z"}]},
+            {"name": "Gemini Models", "buckets": [
+                {"id": "gemini-weekly", "window": "weekly", "remaining_fraction": 0.99, "reset_time": "2026-11-07T12:03:38Z"},
+                {"id": "gemini-5h", "window": "5h", "remaining_fraction": 0.75, "reset_time": "2026-10-31T17:03:38Z"}]},
+            {"name": "Gemini 4 Argon", "buckets": [
+                {"id": "gemini-argon-wtu-weekly", "window": "weekly", "remaining_fraction": 0.5, "reset_time": "2026-11-07T11:41:25Z"}]}
+        ]);
+        let mut u = Usage::default();
+        assert!(Antigravity::from_cli(&groups, &mut u));
+        assert!((u.session.unwrap() - 25.0).abs() < 1e-6 && (u.weekly.unwrap() - 1.0).abs() < 1e-6);
+        assert_eq!(u.weekly_reset, iso(&json!("2026-11-07T12:03:38Z")));
+        assert!(!Antigravity::from_cli(&json!("error"), &mut Usage::default()));
     }
 
     #[test]

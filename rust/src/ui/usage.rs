@@ -153,7 +153,8 @@ pub(super) fn draw_ai(cv: &mut Canvas, st: &State, x: f32, top: f32) {
             let refilled = reset.is_some_and(|r| r <= epoch_now());
             let pct = if refilled { 0.0 } else { pct };
             let left = (100.0 - pct).max(0.0); // show what is left, not what is used
-            let val = ((left + 1e-9).floor() as i64).to_string(); // round down: 99.99 must not read as 100
+            // nearest, as the CLIs show it, but anything used never reads as 100
+            let val = (left.round().min(if pct > 0.0 { 99.0 } else { 100.0 }) as i64).to_string();
             cv.text(cx, y, &val, f_val, if left <= 10.0 { HOT } else { INK });
             cv.text(cx + cv.text_len(&val, f_val) + 4.0, y + 12.0, "%", num(16.0, Face::NumSemi), MUTED);
             segmented_bar(cv, cx, y + 40.0, bw, 12.0, left, color);
