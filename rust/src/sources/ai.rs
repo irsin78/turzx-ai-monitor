@@ -624,7 +624,8 @@ impl Antigravity {
                 _ => {}
             }
         }
-        // Gemini 4 Argon has its own weekly limit on paid Pro plans (its own group)
+        // Gemini 4 Argon has its own weekly limit on paid Pro plans (its own group), likely for a
+        // few months: once agy stops listing it this is None and the weekly cell is as before
         u.weekly_extra = groups.iter().flat_map(|g| g["buckets"].as_array().into_iter().flatten())
             .find(|b| b["window"] == "weekly" && b["id"].as_str().is_some_and(|id| id.contains("argon")))
             .map(used);
@@ -746,6 +747,11 @@ mod tests {
         assert!((u.session.unwrap() - 25.0).abs() < 1e-6 && (u.weekly.unwrap() - 1.0).abs() < 1e-6);
         assert_eq!(u.weekly_reset, iso(&json!("2026-11-07T12:03:38Z")));
         assert!((u.weekly_extra.unwrap() - 50.0).abs() < 1e-6);
+        // without the Argon group: no second weekly value, nothing else changes
+        let gone = json!([groups[0].clone(), groups[1].clone()]);
+        let mut v = Usage::default();
+        assert!(Antigravity::from_cli(&gone, &mut v));
+        assert_eq!((v.weekly_extra, v.session, v.weekly), (None, u.session, u.weekly));
         assert!(!Antigravity::from_cli(&json!("error"), &mut Usage::default()));
     }
 
