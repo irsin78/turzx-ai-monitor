@@ -376,7 +376,7 @@ pub fn run(cmd: &str) -> Result<()> {
             println!("saved preview_agent.png");
         }
         "agy-raw" => {
-            // Antigravity's quota summary as sent (groups and buckets; no credentials)
+            // Antigravity quota as sent: group summary and per-model buckets (no credentials)
             let mut agy = ai::Antigravity::new();
             let j = agy.quota_raw()?;
             println!("{}", serde_json::to_string_pretty(&j)?);

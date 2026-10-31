@@ -412,7 +412,7 @@ pub struct Antigravity {
 }
 
 impl Antigravity {
-    const BASE: &'static str = "https://cloudcode-pa.googleapis.com/v1internal:";
+    const BASE: &'static str = "https://daily-cloudcode-pa.googleapis.com/v1internal:";
 
     pub fn new() -> Self {
         Antigravity { token: None, project: None, plan: Value::Null }
@@ -543,20 +543,14 @@ impl Antigravity {
         self.post(token, "retrieveUserQuotaSummary", json!({"project": self.project}))
     }
 
-    /// The quota summary as the server sends it (no credentials in it), for `diag agy-raw`.
+    /// The quota summary and per-model quota as the server sends them (no credentials in
+    /// them), for `diag agy-raw`.
     pub fn quota_raw(&mut self) -> Result<Value> {
         self.fetch()?; // signs in and finds the project
         let token = self.auth()?;
         let summary = self.quota(&token)?;
-        // per-model quota: only names and quota numbers are kept
-        let models = self.post(&token, "fetchAvailableModels", json!({"project": self.project})).unwrap_or_default();
-        let quota: serde_json::Map<String, Value> = models["models"]
-            .as_object()
-            .into_iter()
-            .flatten()
-            .map(|(name, m)| (name.clone(), json!({"displayName": m["displayName"], "quotaInfo": m["quotaInfo"]})))
-            .collect();
-        Ok(json!({"summary": summary, "models": quota}))
+        let per_model = self.post(&token, "retrieveUserQuota", json!({"project": self.project})).unwrap_or_default();
+        Ok(json!({"summary": summary, "per_model": per_model["buckets"]}))
     }
 
     pub fn fetch(&mut self) -> Result<Usage> {
@@ -588,18 +582,19 @@ impl Antigravity {
                 }
             }
         }
-        // The summary has been seen leaving out the Gemini group; each model's own quota still
-        // has it. A reset within 6 hours is the 5-hour window, a later one the weekly.
-        if let Ok(models) = self.post(&token, "fetchAvailableModels", json!({"project": self.project})) {
-            for m in models["models"].as_object().into_iter().flat_map(|o| o.values()) {
-                let q = &m["quotaInfo"];
-                let (Some(left), Some(reset)) = (q["remainingFraction"].as_f64(), iso(&q["resetTime"])) else { continue };
-                let pct = (1.0 - left.clamp(0.0, 1.0)) * 100.0;
-                let (val, at) = if reset - now() < 6.0 * 3600.0 { (&mut u.session, &mut u.session_reset) } else { (&mut u.weekly, &mut u.weekly_reset) };
-                if val.is_none_or(|v| pct > v) {
-                    *val = Some(pct);
-                    *at = Some(reset);
-                }
+        // The summary leaves out the Gemini group; each model's own quota still has it. Two
+        // calls give it, and replicas have been seen answering with an older value, so the most
+        // used wins. A reset within 6 hours is the 5-hour window, a later one the weekly.
+        let models = self.post(&token, "fetchAvailableModels", json!({"project": self.project})).unwrap_or_default();
+        let buckets = self.post(&token, "retrieveUserQuota", json!({"project": self.project})).unwrap_or_default();
+        let quotas = models["models"].as_object().into_iter().flat_map(|o| o.values()).map(|m| &m["quotaInfo"]);
+        for q in quotas.chain(buckets["buckets"].as_array().into_iter().flatten()) {
+            let (Some(left), Some(reset)) = (q["remainingFraction"].as_f64(), iso(&q["resetTime"])) else { continue };
+            let pct = (1.0 - left.clamp(0.0, 1.0)) * 100.0;
+            let (val, at) = if reset - now() < 6.0 * 3600.0 { (&mut u.session, &mut u.session_reset) } else { (&mut u.weekly, &mut u.weekly_reset) };
+            if val.is_none_or(|v| pct > v) {
+                *val = Some(pct);
+                *at = Some(reset);
             }
         }
         Ok(u)
