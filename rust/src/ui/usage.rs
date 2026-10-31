@@ -178,7 +178,9 @@ pub(super) fn draw_ai(cv: &mut Canvas, st: &State, x: f32, top: f32) {
                 let ex = px + cv.text_len("%", f_pct) + 4.0;
                 cv.text(ex, y + 8.0, &label, f_extra, if e_left <= 10.0 { HOT } else { SOFT });
                 cv.text(ex + cv.text_len(&label, f_extra) + 3.0, y + 12.0, "%", f_pct, MUTED);
-                let dark = mix(color, [0, 0, 0], 0.6);
+                // a deep, saturated blue (only Antigravity has a second limit); mixing in black
+                // made a greyish navy
+                let dark = [20, 60, 210];
                 let mut bars = [(left, color), (e_left, dark)];
                 bars.sort_by(|a, b| b.0.total_cmp(&a.0));
                 for (pct, c) in bars {
