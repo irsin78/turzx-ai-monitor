@@ -28,13 +28,13 @@ pub struct Bubble {
     project: String,
 }
 
-/// The bubbles for the Claude and Codex mascots: a session done or waiting for the user.
-pub fn agent_bubbles(st: &State) -> [Option<Bubble>; 2] {
+/// The bubbles for the Claude, Codex and Antigravity mascots: a session done or waiting for the user.
+pub fn agent_bubbles(st: &State) -> [Option<Bubble>; 3] {
     use crate::agent_status::{Source, Status};
     let t = i18n::get();
     let ai = &config::get().ai;
     let now = std::time::Instant::now();
-    [(Source::Claude, ai.claude), (Source::Codex, ai.codex)].map(|(src, on)| {
+    [(Source::Claude, ai.claude), (Source::Codex, ai.codex), (Source::Antigravity, ai.antigravity)].map(|(src, on)| {
         let s = st.agents.summary(src, now).filter(|_| on)?;
         let waiting = s.status == Status::Waiting;
         let more = if s.more > 0 { format!(" +{}", s.more) } else { String::new() };

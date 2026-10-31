@@ -81,7 +81,7 @@ pub fn run(ai_enabled: bool) -> ! {
     let mut drawn_at: Option<i64> = None; // second of the last full redraw
     let mut work: Option<ui::Canvas> = None;
     let mut band_backup: Vec<u8> = Vec::new(); // the mascot band as redrawn, without mascots
-    let mut bubbles: [Option<ui::Bubble>; 2] = [None, None];
+    let mut bubbles: [Option<ui::Bubble>; 3] = [None, None, None];
     let mut last_tick = Instant::now();
     // `[debug] perf = true`: frame timing in the log every 10 s
     let perf_on = crate::config::get().debug.perf;

@@ -257,7 +257,7 @@ temperature = "{temp}"
 # Panel rotation: 0, or 180 when the panel is mounted upside down
 rotation = {rotation}
 
-# Loopback port for the Claude Code / Codex status bubbles (`turzx-dashboard hooks install`)
+# Loopback port for the Claude Code / Codex / Antigravity status bubbles (`turzx-dashboard hooks install`)
 agent_status_port = {agent_status_port}
 
 [location]

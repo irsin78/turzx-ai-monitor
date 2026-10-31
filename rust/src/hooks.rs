@@ -1,6 +1,7 @@
 //! `hooks install|uninstall|status`: add the agent-status hooks to Claude Code's
-//! ~/.claude/settings.json and wrap Codex's notify in ~/.codex/config.toml (backups first,
-//! atomic replacement; uninstall restores the original notify). agent-event changes nothing.
+//! ~/.claude/settings.json and the Antigravity CLI's ~/.gemini/config/hooks.json, and wrap Codex's
+//! notify in ~/.codex/config.toml (backups first, atomic replacement; uninstall restores the
+//! original notify). agent-event changes nothing.
 use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
@@ -56,6 +57,38 @@ fn edit_claude(text: &str, exe: &Path, port: u16, install: bool) -> Result<Strin
         }
     }
     // Avoid gratuitous rewrites, including a second installation.
+    if !text.trim().is_empty() && serde_json::from_str::<Value>(text)? == root { return Ok(text.into()); }
+    Ok(serde_json::to_string_pretty(&root)? + "\n")
+}
+
+/// Our named hook in agy's hooks.json (one key of its own beside everyone else's).
+const AGY_HOOK: &str = "turzx-dashboard";
+const AGY_EVENTS: [&str; 2] = ["PreInvocation", "Stop"];
+
+/// agy runs a hook as `cmd /c <command>` and its quotes reach cmd escaped, so a quoted path does
+/// not work: a path with spaces goes in its short (8.3) form.
+fn agy_command(exe: &Path, port: u16) -> Result<String> {
+    let mut path = exe.to_string_lossy().into_owned();
+    if path.contains(' ') {
+        use windows::core::HSTRING;
+        use windows::Win32::Storage::FileSystem::GetShortPathNameW;
+        let mut buf = [0u16; 1024];
+        let n = unsafe { GetShortPathNameW(&HSTRING::from(exe.as_os_str()), Some(&mut buf)) } as usize;
+        ensure!(n > 0 && n < buf.len(), "No short path for {path}; agy cannot run a hook from a folder with spaces");
+        path = String::from_utf16_lossy(&buf[..n]);
+        ensure!(!path.contains(' '), "No short path for {path}; agy cannot run a hook from a folder with spaces");
+    }
+    Ok(format!("{path} agent-event antigravity --port {port} {MARKER}"))
+}
+fn edit_agy(text: &str, command: &str, install: bool) -> Result<String> {
+    if !install && text.trim().is_empty() { return Ok(text.into()); }
+    let mut root: Value = if text.trim().is_empty() { json!({}) } else { serde_json::from_str(text)? };
+    let hooks = root.as_object_mut().context("agy hooks.json must be an object")?;
+    hooks.remove(AGY_HOOK);
+    if install {
+        let handler = json!([{"type": "command", "command": command, "timeout": 5}]);
+        hooks.insert(AGY_HOOK.into(), Value::Object(AGY_EVENTS.iter().map(|e| (e.to_string(), handler.clone())).collect()));
+    }
     if !text.trim().is_empty() && serde_json::from_str::<Value>(text)? == root { return Ok(text.into()); }
     Ok(serde_json::to_string_pretty(&root)? + "\n")
 }
@@ -129,33 +162,47 @@ fn write(path: &Path, before: &str, after: &str) -> Result<()> {
     result
 }
 
-pub fn edit_paths(claude: &Path, codex: &Path, exe: &Path, port: u16, install: bool) -> Result<()> {
+/// `agy`: hooks.json and the hook command, when the Antigravity CLI is set up (its config folder
+/// exists); otherwise it is left alone.
+pub fn edit_paths(claude: &Path, codex: &Path, agy: Option<(&Path, &str)>, exe: &Path, port: u16, install: bool) -> Result<()> {
     ensure!(port != 0, "Agent status UDP port must be 1..65535");
     let (c, x) = (read(claude)?, read(codex)?);
-    // Validate both before writing either, so invalid unrelated config is untouched.
+    let a = agy.map(|(path, _)| read(path)).transpose()?;
+    // Validate all before writing any, so invalid unrelated config is untouched.
     let (new_c, new_x) = (edit_claude(&c, exe, port, install)?, edit_codex(&x, exe, port, install)?);
+    let new_a = match (agy, &a) { (Some((_, cmd)), Some(a)) => Some(edit_agy(a, cmd, install)?), _ => None };
     write(claude, &c, &new_c)?;
-    write(codex, &x, &new_x)
+    write(codex, &x, &new_x)?;
+    if let (Some((path, _)), Some(a), Some(new_a)) = (agy, &a, &new_a) { write(path, a, new_a)?; }
+    Ok(())
 }
 pub fn command(action: &str, args: &[String]) -> Result<String> {
     let home = PathBuf::from(std::env::var_os("USERPROFILE").context("USERPROFILE is unset")?);
     let option = |key| args.iter().position(|s| s == key).and_then(|i| args.get(i + 1)).map(PathBuf::from);
     let claude = option("--claude-config").unwrap_or_else(|| home.join(".claude/settings.json"));
     let codex = option("--codex-config").unwrap_or_else(|| home.join(".codex/config.toml"));
+    let agy = option("--agy-config").unwrap_or_else(|| home.join(".gemini/config/hooks.json"));
     let exe = crate::install::install_dir().join("turzx-dashboard.exe");
+    let port = crate::config::get().agent_status_port;
+    let agy_set_up = agy.parent().is_some_and(Path::is_dir);
     match action {
         "install" | "uninstall" => {
-            edit_paths(&claude, &codex, &exe, crate::config::get().agent_status_port, action == "install")?;
-            Ok(format!("Agent hooks {action} complete.\nClaude: {}\nCodex: {}", claude.display(), codex.display()))
+            // the command only matters for an install; an uninstall removes our key whatever it says
+            let cmd = if agy_set_up && action == "install" { agy_command(&exe, port)? } else { String::new() };
+            edit_paths(&claude, &codex, agy_set_up.then_some((agy.as_path(), cmd.as_str())), &exe, port, action == "install")?;
+            let agy_line = if agy_set_up { agy.display().to_string() } else { "not set up (skipped)".into() };
+            Ok(format!("Agent hooks {action} complete.\nClaude: {}\nCodex: {}\nAntigravity: {agy_line}", claude.display(), codex.display()))
         }
         "status" => {
             let c: Value = serde_json::from_str(&read(&claude)?).unwrap_or(json!({}));
             let count = EVENTS.iter().filter(|e| c["hooks"][**e].as_array().is_some_and(|groups| groups.iter().any(|g|
                 g["hooks"].as_array().is_some_and(|hooks| hooks.iter().any(|h| h["command"].as_str().is_some_and(owned_command)))))).count();
             let x = notify(&read(&codex)?)?.is_some_and(|(_, _, argv)| owned_notify(&argv));
-            Ok(format!("Claude: {count}/{} hooks; Codex notify wrapper: {x}\nInstalled exe: {}", EVENTS.len(), exe.display()))
+            let a: Value = serde_json::from_str(&read(&agy)?).unwrap_or(json!({}));
+            let a = AGY_EVENTS.iter().filter(|e| a[AGY_HOOK][**e].is_array()).count();
+            Ok(format!("Claude: {count}/{} hooks; Codex notify wrapper: {x}; Antigravity: {a}/{} hooks\nInstalled exe: {}", EVENTS.len(), AGY_EVENTS.len(), exe.display()))
         }
-        _ => anyhow::bail!("usage: hooks install|uninstall|status [--claude-config PATH] [--codex-config PATH]"),
+        _ => anyhow::bail!("usage: hooks install|uninstall|status [--claude-config PATH] [--codex-config PATH] [--agy-config PATH]"),
     }
 }
 
@@ -196,6 +243,21 @@ mod tests {
         assert_eq!(edit_codex("", exe(), 47135, false).unwrap(), "");
     }
     #[test]
+    fn agy_keeps_other_named_hooks() {
+        let input = "{\n  \"orca-status\": {\n    \"Stop\": [{\"command\": \"C:\\\\orca\\\\stop.cmd\", \"type\": \"command\"}]\n  }\n}";
+        let cmd = agy_command(Path::new("C:/Programs/TurzxDashboard/turzx-dashboard.exe"), 47136).unwrap();
+        assert!(cmd.ends_with(" agent-event antigravity --port 47136 --turzx-agent-status-v1") && !cmd.contains('"'));
+        let after = edit_agy(input, &cmd, true).unwrap();
+        assert_eq!(edit_agy(&after, &cmd, true).unwrap(), after);
+        let v: Value = serde_json::from_str(&after).unwrap();
+        assert_eq!(v[AGY_HOOK]["Stop"][0]["command"], cmd.as_str());
+        assert_eq!(v["orca-status"]["Stop"][0]["command"], "C:\\orca\\stop.cmd");
+        let back: Value = serde_json::from_str(&edit_agy(&after, "", false).unwrap()).unwrap();
+        assert_eq!(back, serde_json::from_str::<Value>(input).unwrap());
+        assert_eq!(edit_agy(input, "", false).unwrap(), input);
+        assert!(edit_agy("[1]", &cmd, true).is_err());
+    }
+    #[test]
     fn path_edits_back_up_and_invalid_second_file_does_not_change_first() {
         let dir = std::env::temp_dir().join(format!("turzx-hooks-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -203,16 +265,22 @@ mod tests {
         let original_c = r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"keep"}]}]},"theme":"dark"}"#;
         let original_x = "# keep\nnotify = [ 'helper', 'turn-ended' ]\nmodel = 'test'\n";
         std::fs::write(&c, original_c).unwrap(); std::fs::write(&x, original_x).unwrap();
-        edit_paths(&c, &x, exe(), 47135, true).unwrap();
+        edit_paths(&c, &x, None, exe(), 47135, true).unwrap();
         assert_eq!(read(&dir.join("settings.json.bak")).unwrap(), original_c);
         assert_eq!(read(&dir.join("config.toml.bak")).unwrap(), original_x);
         let after = (read(&c).unwrap(), read(&x).unwrap());
-        edit_paths(&c, &x, exe(), 47135, true).unwrap();
+        edit_paths(&c, &x, None, exe(), 47135, true).unwrap();
         assert_eq!((read(&c).unwrap(), read(&x).unwrap()), after);
-        edit_paths(&c, &x, exe(), 47135, false).unwrap();
+        edit_paths(&c, &x, None, exe(), 47135, false).unwrap();
         assert_eq!(read(&x).unwrap(), original_x);
         let before = read(&c).unwrap(); std::fs::write(&x, "notify = 'bad'").unwrap();
-        assert!(edit_paths(&c, &x, exe(), 47135, true).is_err()); assert_eq!(read(&c).unwrap(), before);
+        assert!(edit_paths(&c, &x, None, exe(), 47135, true).is_err()); assert_eq!(read(&c).unwrap(), before);
+        // an invalid agy file stops the install before Claude's or Codex's file changes
+        std::fs::write(&x, original_x).unwrap();
+        let a = dir.join("hooks.json"); std::fs::write(&a, "[").unwrap();
+        let x_before = read(&x).unwrap();
+        assert!(edit_paths(&c, &x, Some((&a, "cmd")), exe(), 47135, true).is_err());
+        assert_eq!((read(&c).unwrap(), read(&x).unwrap()), (before, x_before));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

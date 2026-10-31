@@ -21,7 +21,7 @@ impl Mascots {
     pub fn update(&mut self, _dt: f32, _areas: &[Area; 3]) {}
     pub fn draw(&self, _pm: &mut Pixmap, _areas: &[Area; 3]) {}
     /// No mascots: the status bubbles point at the middle of the empty strips.
-    pub fn heads(&self, areas: &[Area; 3]) -> [(f32, f32); 2] {
-        [0, 1].map(|i| ((areas[i].x0 + areas[i].x1) / 2.0, areas[i].ground - 40.0))
+    pub fn heads(&self, areas: &[Area; 3]) -> [(f32, f32); 3] {
+        [0, 1, 2].map(|i| ((areas[i].x0 + areas[i].x1) / 2.0, areas[i].ground - 40.0))
     }
 }

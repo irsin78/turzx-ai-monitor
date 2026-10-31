@@ -350,7 +350,7 @@ pub fn run(cmd: &str) -> Result<()> {
             println!("{}x{}: {n} frames, last at {last:.2}s, decoded in {:?}", v.width, v.height, t.elapsed());
         }
         "agent-status" => {
-            // the layout preview with a Claude session waiting (and two more) and a Codex one done
+            // the layout preview with a Claude session waiting (and two more), Codex and Antigravity done
             use crate::agent_status::{Event, Source, Status};
             let mut st = fake_state();
             let now = std::time::Instant::now();
@@ -359,6 +359,7 @@ pub fn run(cmd: &str) -> Result<()> {
                 (Source::Claude, Status::Done, "b", "website"),
                 (Source::Claude, Status::Waiting, "c", "turzx-ai-monitor"),
                 (Source::Codex, Status::Done, "d", "Turzx"),
+                (Source::Antigravity, Status::Done, "e", "agy-test"),
             ] {
                 st.agents.apply(Event { source, event: status, session: session.into(), project: project.into() }, now);
             }

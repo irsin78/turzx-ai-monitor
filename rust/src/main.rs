@@ -114,6 +114,6 @@ const USAGE: &str = "turzx-dashboard [command]
   uninstall [--purge]     --purge also removes settings, logs and caches
   autostart on|off
   settings                open the settings window
-  hooks install|uninstall|status   Claude Code / Codex status bubbles (edits their settings, with backups)
+  hooks install|uninstall|status   Claude Code / Codex / Antigravity status bubbles (edits their settings, with backups)
   diag <command>          previews and diagnostics (diag help)
 ";

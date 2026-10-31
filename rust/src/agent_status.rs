@@ -1,5 +1,5 @@
-//! Claude Code / Codex sessions that finished or wait for the user, for a bubble over their
-//! mascots. Claude Code hooks and Codex's notify run `agent-event`, which sends one small
+//! Claude Code / Codex / Antigravity CLI sessions that finished or wait for the user, for a
+//! bubble over their mascots. Claude Code and agy hooks and Codex's notify run `agent-event`, which sends one small
 //! loopback UDP datagram and exits; the dashboard keeps the sessions in memory. No transcript or
 //! assistant message is forwarded. (After the 3.5" turzxforai35 dashboard.)
 use std::collections::HashMap;
@@ -15,8 +15,8 @@ pub const MARKER: &str = "--turzx-agent-status-v1";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Source { Claude, Codex }
-impl Source { pub fn index(self) -> usize { match self { Self::Claude => 0, Self::Codex => 1 } } }
+pub enum Source { Claude, Codex, Antigravity }
+impl Source { pub fn index(self) -> usize { match self { Self::Claude => 0, Self::Codex => 1, Self::Antigravity => 2 } } }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -34,7 +34,7 @@ impl Event {
     fn valid(&self) -> bool {
         !self.session.is_empty() && self.session.len() <= 256 && self.project.chars().count() <= 100
             && !self.session.chars().chain(self.project.chars()).any(char::is_control)
-            && !(self.source == Source::Codex && self.event == Status::Waiting)
+            && !(self.source != Source::Claude && self.event == Status::Waiting)
     }
     pub fn encode(&self) -> Option<Vec<u8>> { self.valid().then(|| serde_json::to_vec(self).ok()).flatten() }
     pub fn decode(data: &[u8]) -> Option<Self> {
@@ -87,9 +87,26 @@ pub fn parse(source: Source, input: &str) -> Option<Event> {
             if v["type"] != "agent-turn-complete" { return None; }
             (v["thread-id"].as_str()?, Status::Done)
         }
+        // agy has no hook for a permission prompt: only done. PreInvocation comes before every
+        // model call, so the next prompt (or a resumed turn) clears it.
+        Source::Antigravity => {
+            let status = if v["terminationReason"].is_string() {
+                if v["fullyIdle"] != true { return None; } // a subagent, or more to come
+                if v["terminationReason"] == "USER_CANCELED" { Status::Clear } else { Status::Done }
+            } else if v["invocationNum"].is_number() {
+                Status::Clear
+            } else {
+                return None;
+            };
+            (v["conversationId"].as_str()?, status)
+        }
+    };
+    let cwd = match source {
+        Source::Antigravity => v["workspacePaths"][0].as_str(),
+        _ => v["cwd"].as_str(),
     };
     // Split both separators, independent of the shell that delivered cwd.
-    let project = v["cwd"].as_str().unwrap_or("").trim_end_matches(['/', '\\'])
+    let project = cwd.unwrap_or("").trim_end_matches(['/', '\\'])
         .rsplit(['/', '\\']).next().unwrap_or("").chars().filter(|c| !c.is_control()).take(100).collect();
     let event = Event { source, event: status, session: session.into(), project };
     event.valid().then_some(event)
@@ -98,7 +115,7 @@ pub fn parse(source: Source, input: &str) -> Option<Event> {
 #[derive(Clone)]
 struct Session { event: Event, at: Instant, sequence: u64 }
 #[derive(Clone, Default)]
-pub struct Sessions { entries: HashMap<(Source, String), Session>, pub revision: [u64; 2] }
+pub struct Sessions { entries: HashMap<(Source, String), Session>, pub revision: [u64; 3] }
 pub struct Summary<'a> { pub status: Status, pub project: &'a str, pub more: usize }
 impl Sessions {
     pub fn apply(&mut self, event: Event, now: Instant) {
@@ -117,12 +134,13 @@ impl Sessions {
         self.entries.insert(key, Session { event, at: now, sequence: self.revision[index] });
     }
     /// Waiting stays until answered (or 30 min). Claude's done was seen as it arrived: 10 s. Codex
-    /// sends no "next prompt" event, so its done has nothing to clear it but time: 3 min.
+    /// sends no "next prompt" event, so its done has nothing to clear it but time: 3 min; agy's
+    /// next prompt clears it, the same 3 min otherwise.
     fn lifetime(e: &Event) -> Duration {
         Duration::from_secs(match (e.event, e.source) {
             (Status::Waiting, _) => 1800,
             (_, Source::Claude) => 10,
-            (_, Source::Codex) => 180,
+            (_, Source::Codex | Source::Antigravity) => 180,
         })
     }
     fn alive(s: &Session, now: Instant) -> bool {
@@ -167,13 +185,17 @@ fn receive(socket: &UdpSocket, buf: &mut [u8]) -> std::io::Result<Option<Event>>
 /// subsystem preserves redirected standard handles; AttachConsole could replace them.
 /// The previous notify is spawned with no console, and never awaited.
 pub fn command(args: &[String]) {
-    let Some(source) = args.first().and_then(|s| match s.as_str() { "claude" => Some(Source::Claude), "codex" => Some(Source::Codex), _ => None }) else { return; };
+    let Some(source) = args.first().and_then(|s| match s.as_str() {
+        "claude" => Some(Source::Claude), "codex" => Some(Source::Codex), "antigravity" => Some(Source::Antigravity), _ => None,
+    }) else { return; };
     let option = |key| args.iter().position(|s| s == key).and_then(|i| args.get(i + 1));
     let port = option("--port").and_then(|s| s.parse().ok()).filter(|&p| p != 0).unwrap_or(DEFAULT_PORT);
     let input = match source {
-        Source::Claude => {
+        Source::Claude | Source::Antigravity => {
             let mut input = String::new();
             if std::io::stdin().take(1024 * 1024).read_to_string(&mut input).is_err() { return; }
+            // agy reads a JSON result from every hook: an empty one changes nothing
+            if source == Source::Antigravity { println!("{{}}"); }
             input
         }
         Source::Codex => {
@@ -202,6 +224,9 @@ fn trace(source: Source, input: &str, parsed: Option<&Event>) {
     let what = match source {
         Source::Claude => format!("claude {} type={:?} message={:?}", field("hook_event_name"), field("notification_type"), field("message")),
         Source::Codex => format!("codex {}", field("type")),
+        Source::Antigravity => format!("antigravity {}", if v["terminationReason"].is_string() {
+            format!("Stop reason={} idle={}", field("terminationReason"), v["fullyIdle"])
+        } else { format!("invocation={}", v["invocationNum"]) }),
     };
     let result = parsed.map_or("ignored".to_string(), |e| format!("{:?} {}", e.event, e.project));
     let truncate = std::fs::metadata(&path).is_ok_and(|m| m.len() > 64 * 1024);
@@ -292,6 +317,20 @@ mod tests {
         assert_eq!(s.summary(Source::Claude, now + Duration::from_secs(60)).unwrap().status, Status::Waiting);
         s.apply(ev(Status::Clear), now);
         assert!(s.summary(Source::Claude, now).is_none());
+    }
+    #[test]
+    fn antigravity_hook_events() {
+        let common = r#""conversationId":"c1","workspacePaths":["C:/Projects/Turzx"],"lastUserInput":"private","transcriptPath":"secret""#;
+        let agy = |extra: &str| parse(Source::Antigravity, &format!("{{{common},{extra}}}"));
+        let stop = agy(r#""terminationReason":"NO_TOOL_CALL","fullyIdle":true,"executionNum":0"#).unwrap();
+        assert_eq!((stop.event, stop.project.as_str(), stop.session.as_str()), (Status::Done, "Turzx", "c1"));
+        let bytes = String::from_utf8(stop.encode().unwrap()).unwrap();
+        assert!(!bytes.contains("private") && !bytes.contains("secret"));
+        assert!(agy(r#""terminationReason":"NO_TOOL_CALL","fullyIdle":false"#).is_none());
+        assert_eq!(agy(r#""terminationReason":"USER_CANCELED","fullyIdle":true"#).unwrap().event, Status::Clear);
+        assert_eq!(agy(r#""invocationNum":0,"initialNumSteps":1"#).unwrap().event, Status::Clear);
+        assert!(agy(r#""toolCall":{"name":"run_command"},"stepIdx":2"#).is_none());
+        assert!(Event::decode(br#"{"source":"antigravity","event":"waiting","session":"s","project":"p"}"#).is_none());
     }
     #[test]
     fn done_lifetimes() {
