@@ -21,6 +21,8 @@ pub struct Config {
     pub temperature: String,
     /// 0 or 180: turn everything on the panel upside down (panel mounted the other way)
     pub rotation: u16,
+    /// loopback UDP port for the Claude Code / Codex status hooks (reinstall hooks after a change)
+    pub agent_status_port: u16,
     pub location: Location,
     pub holidays: Holidays,
     pub air_quality: AirQuality,
@@ -137,6 +139,7 @@ impl Default for Config {
             clock: "12h".into(),
             temperature: "C".into(),
             rotation: 0,
+            agent_status_port: crate::agent_status::DEFAULT_PORT,
             location: Location::default(),
             holidays: Holidays { country: "auto".into() },
             air_quality: AirQuality { scale: "auto".into() },
@@ -254,6 +257,9 @@ temperature = "{temp}"
 # Panel rotation: 0, or 180 when the panel is mounted upside down
 rotation = {rotation}
 
+# Loopback port for the Claude Code / Codex status bubbles (`turzx-dashboard hooks install`)
+agent_status_port = {agent_status_port}
+
 [location]
 # Weather and air quality for this city (looked up by name), or set latitude/longitude
 city = "{city}"
@@ -303,6 +309,7 @@ tmdb_key = "{tmdb_key}"
         clock = c.clock,
         temp = c.temperature,
         rotation = c.rotation,
+        agent_status_port = c.agent_status_port,
         city = c.location.city,
         lat_key = if c.location.latitude.is_some() { "latitude" } else { "# latitude" },
         lon_key = if c.location.longitude.is_some() { "longitude" } else { "# longitude" },

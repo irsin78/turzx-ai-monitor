@@ -1,8 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // release: no console window
 
+mod agent_status;
 mod app;
 mod config;
 mod diag;
+mod hooks;
 mod i18n;
 mod install;
 mod logging;
@@ -27,6 +29,11 @@ use sensors::pawnio;
 use anyhow::Result;
 
 fn main() -> Result<()> {
+    // Claude Code / Codex hook: one datagram and out, before anything slower
+    if std::env::args().nth(1).as_deref() == Some("agent-event") {
+        agent_status::command(&std::env::args().skip(2).collect::<Vec<_>>());
+        return Ok(());
+    }
     // Started from a terminal: print there (the release build has no console of its own)
     unsafe {
         let _ = windows::Win32::System::Console::AttachConsole(windows::Win32::System::Console::ATTACH_PARENT_PROCESS);
@@ -61,6 +68,7 @@ fn main() -> Result<()> {
         Some("uninstall") => return done(install::uninstall(arg("--purge"))),
         Some("autostart") => return done(install::autostart(args.get(1).map(String::as_str) != Some("off"))),
         Some("settings") => return done(settings::open()),
+        Some("hooks") => return done(hooks::command(args.get(1).map_or("status", String::as_str), &args[2.min(args.len())..])),
         Some("--help" | "-h" | "help") => {
             install::tell(USAGE, false);
             return Ok(());
@@ -106,5 +114,6 @@ const USAGE: &str = "turzx-dashboard [command]
   uninstall [--purge]     --purge also removes settings, logs and caches
   autostart on|off
   settings                open the settings window
+  hooks install|uninstall|status   Claude Code / Codex status bubbles (edits their settings, with backups)
   diag <command>          previews and diagnostics (diag help)
 ";

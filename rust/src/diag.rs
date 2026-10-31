@@ -9,7 +9,7 @@ use crate::sensors::{self as hw};
 use crate::sources::{ai, weather};
 use crate::{mascot, state, ui};
 
-pub const COMMANDS: &str = "usb | sensors | weather | claude-cli | layout | standby | mascots | jpeg-check | profile | fps-test | test-pattern | sd | sd-put | sd-play | sd-stop | encode-test | offline | sd-rm | decode-test";
+pub const COMMANDS: &str = "usb | sensors | weather | claude-cli | layout | standby | mascots | jpeg-check | profile | fps-test | test-pattern | sd | sd-put | sd-play | sd-stop | encode-test | offline | sd-rm | decode-test | agent-status";
 
 /// Four vertical quarter bands (red, green, blue, white).
 fn test_bands() -> Vec<u8> {
@@ -348,6 +348,22 @@ pub fn run(cmd: &str) -> Result<()> {
                 last = time;
             }
             println!("{}x{}: {n} frames, last at {last:.2}s, decoded in {:?}", v.width, v.height, t.elapsed());
+        }
+        "agent-status" => {
+            // the layout preview with a Claude session waiting (and two more) and a Codex one done
+            use crate::agent_status::{Event, Source, Status};
+            let mut st = fake_state();
+            let now = std::time::Instant::now();
+            for (source, status, session, project) in [
+                (Source::Claude, Status::Done, "a", "dotfiles"),
+                (Source::Claude, Status::Done, "b", "website"),
+                (Source::Claude, Status::Waiting, "c", "turzx-ai-monitor"),
+                (Source::Codex, Status::Done, "d", "Turzx"),
+            ] {
+                st.agents.apply(Event { source, event: status, session: session.into(), project: project.into() }, now);
+            }
+            ui::render(&st, chrono::Local::now()).save_png("preview_agent.png")?;
+            println!("saved preview_agent.png");
         }
         "test-pattern" => {
             let mut lcd = lcd::Lcd::open()?;

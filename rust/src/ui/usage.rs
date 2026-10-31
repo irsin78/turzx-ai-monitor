@@ -21,6 +21,29 @@ pub(super) fn segmented_bar(cv: &mut Canvas, x: f32, y: f32, w: f32, h: f32, pct
     }
 }
 
+/// The status bubble at (`x`, `y`), `w` wide: what (waiting / done, "+N" more sessions) and the
+/// project folder, with a tail down towards the mascot.
+fn draw_agent_bubble(cv: &mut Canvas, x: f32, y: f32, w: f32, s: &crate::agent_status::Summary<'_>) {
+    let waiting = s.status == crate::agent_status::Status::Waiting;
+    let color = if waiting { WARN } else { [125, 221, 180] };
+    let (h, bg) = (30.0, [30, 42, 65]);
+    cv.rect(x, y, x + w, y + h, bg);
+    cv.rect(x, y, x + 2.0, y + h, color);
+    let tx = x + w / 2.0;
+    cv.polygon(&[(tx - 6.0, y + h), (tx + 6.0, y + h), (tx, y + h + 6.0)], bg);
+    let t = i18n::get();
+    let more = if s.more > 0 { format!("  +{}", s.more) } else { String::new() };
+    let fb = ko(13.0, true);
+    let label = format!("{}{more}", t.agent[if waiting { 0 } else { 1 }]);
+    cv.text(x + 8.0, y + 1.0, &label, fb, color);
+    let fp = ko(13.0, false);
+    let mut project = s.project.to_string();
+    while !project.is_empty() && cv.text_len(&project, fp) > w - 14.0 {
+        project.pop();
+    }
+    cv.text(x + 8.0, y + 15.0, &project, fp, INK);
+}
+
 /// An outlined ticket (notched sides, perforation) and `count` after it, if it fits before `right`.
 fn draw_coupons(cv: &mut Canvas, x: f32, y: f32, count: u64, color: Rgb, right: f32) {
     let f = num(14.0, Face::NumSemi);
@@ -75,6 +98,12 @@ pub(super) fn draw_ai(cv: &mut Canvas, st: &State, x: f32, top: f32) {
         // Codex refill coupons: a ticket and how many
         if let Some(n) = u.map(|u| u.coupons).filter(|&n| n > 0) {
             draw_coupons(cv, px, y + 16.0, n, color, c1 - 10.0);
+        }
+        // a Claude Code / Codex session done or waiting for the user: a bubble over the mascot,
+        // covering the name line
+        let source = [Some(crate::agent_status::Source::Claude), Some(crate::agent_status::Source::Codex), None][i];
+        if let Some(status) = source.and_then(|src| st.agents.summary(src, std::time::Instant::now())) {
+            draw_agent_bubble(cv, x + 12.0, y - 2.0, (c1 - 18.0) - (x + 12.0), &status);
         }
         let err = st.ai_err.get(name);
         if let (Some(e), None) = (err, u) {

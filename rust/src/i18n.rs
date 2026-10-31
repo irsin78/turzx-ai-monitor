@@ -70,6 +70,8 @@ pub struct Strings {
     pub movies: [&'static str; 2],
     /// release date in the movie video (chrono format)
     pub movie_date: &'static str,
+    /// Claude Code / Codex status bubble: waiting for the user, done
+    pub agent: [&'static str; 2],
 }
 
 /// Supported languages, in the order of `config.toml`'s comment.
@@ -179,6 +181,7 @@ pub static EN: Strings = Strings {
     standby: ["Good night · see you soon", "See you later!", "Taking a short break"],
     movies: ["Now showing", "Opens {}"],
     movie_date: "%b %-d",
+    agent: ["Waiting", "Done"],
 };
 
 pub static KO: Strings = Strings {
@@ -217,6 +220,7 @@ pub static KO: Strings = Strings {
     standby: ["잘 자요 · 곧 다시 만나요", "다녀올게요!", "잠시 쉬는 중"],
     movies: ["상영 중", "{} 개봉"],
     movie_date: "%-m월 %-d일",
+    agent: ["입력 대기", "완료"],
 };
 
 pub static JA: Strings = Strings {
@@ -255,6 +259,7 @@ pub static JA: Strings = Strings {
     standby: ["おやすみなさい · またね", "いってきます！", "ちょっと休憩中"],
     movies: ["上映中", "{} 公開"],
     movie_date: "%-m月%-d日",
+    agent: ["入力待ち", "完了"],
 };
 
 pub static ZH_CN: Strings = Strings {
@@ -292,6 +297,7 @@ pub static ZH_CN: Strings = Strings {
     standby: ["晚安 · 回头见", "我出门啦！", "稍作休息"],
     movies: ["正在上映", "{} 上映"],
     movie_date: "%-m月%-d日",
+    agent: ["等待输入", "完成"],
 };
 
 pub static ZH_TW: Strings = Strings {
@@ -329,6 +335,7 @@ pub static ZH_TW: Strings = Strings {
     standby: ["晚安 · 待會見", "我出門囉！", "稍作休息"],
     movies: ["上映中", "{} 上映"],
     movie_date: "%-m月%-d日",
+    agent: ["等待輸入", "完成"],
 };
 
 pub static ES: Strings = Strings {
@@ -367,6 +374,7 @@ pub static ES: Strings = Strings {
     standby: ["Buenas noches · hasta pronto", "¡Hasta luego!", "Tomando un descanso"],
     movies: ["En cines", "Estreno: {}"],
     movie_date: "%-d %b",
+    agent: ["Esperando", "Listo"],
 };
 
 pub static FR: Strings = Strings {
@@ -405,6 +413,7 @@ pub static FR: Strings = Strings {
     standby: ["Bonne nuit · à bientôt", "À plus tard !", "Petite pause"],
     movies: ["À l'affiche", "Sortie le {}"],
     movie_date: "%-d %B",
+    agent: ["En attente", "Terminé"],
 };
 
 pub static DE: Strings = Strings {
@@ -443,6 +452,7 @@ pub static DE: Strings = Strings {
     standby: ["Gute Nacht · bis bald", "Bis später!", "Kurze Pause"],
     movies: ["Im Kino", "Ab {}"],
     movie_date: "%-d. %B",
+    agent: ["Wartet", "Fertig"],
 };
 
 pub static IT: Strings = Strings {
@@ -481,6 +491,7 @@ pub static IT: Strings = Strings {
     standby: ["Buonanotte · a presto", "A dopo!", "Una piccola pausa"],
     movies: ["Al cinema", "Dal {}"],
     movie_date: "%-d %B",
+    agent: ["In attesa", "Fatto"],
 };
 
 pub static PT: Strings = Strings {
@@ -519,6 +530,7 @@ pub static PT: Strings = Strings {
     standby: ["Boa noite · até logo", "Até mais!", "Fazendo uma pausa"],
     movies: ["Em cartaz", "Estreia: {}"],
     movie_date: "%-d %b",
+    agent: ["Aguardando", "Pronto"],
 };
 
 pub static RU: Strings = Strings {
@@ -557,6 +569,7 @@ pub static RU: Strings = Strings {
     standby: ["Спокойной ночи · до встречи", "До скорого!", "Небольшой перерыв"],
     movies: ["Уже в кино", "Премьера: {}"],
     movie_date: "%-d %B",
+    agent: ["Ждёт ответа", "Готово"],
 };
 
 pub static PL: Strings = Strings {
@@ -597,6 +610,7 @@ pub static PL: Strings = Strings {
     standby: ["Dobranoc · do zobaczenia", "Na razie!", "Krótka przerwa"],
     movies: ["W kinach", "Premiera: {}"],
     movie_date: "%-d %B",
+    agent: ["Czeka", "Gotowe"],
 };
 
 pub static TR: Strings = Strings {
@@ -635,6 +649,7 @@ pub static TR: Strings = Strings {
     standby: ["İyi geceler · görüşürüz", "Sonra görüşürüz!", "Kısa bir mola"],
     movies: ["Vizyonda", "{} vizyonda"],
     movie_date: "%-d %B",
+    agent: ["Bekliyor", "Bitti"],
 };
 
 pub static NL: Strings = Strings {
@@ -673,6 +688,7 @@ pub static NL: Strings = Strings {
     standby: ["Welterusten · tot snel", "Tot later!", "Even pauze"],
     movies: ["Nu in de bioscoop", "Vanaf {}"],
     movie_date: "%-d %B",
+    agent: ["Wacht", "Klaar"],
 };
 
 pub static VI: Strings = Strings {
@@ -711,6 +727,7 @@ pub static VI: Strings = Strings {
     standby: ["Chúc ngủ ngon · hẹn gặp lại", "Hẹn gặp lại!", "Nghỉ một chút"],
     movies: ["Đang chiếu", "Khởi chiếu {}"],
     movie_date: "%-d/%-m",
+    agent: ["Đang chờ", "Xong"],
 };
 
 pub static ID: Strings = Strings {
@@ -749,4 +766,5 @@ pub static ID: Strings = Strings {
     standby: ["Selamat malam · sampai jumpa", "Sampai nanti!", "Istirahat sebentar"],
     movies: ["Sedang tayang", "Tayang {}"],
     movie_date: "%-d %B",
+    agent: ["Menunggu", "Selesai"],
 };

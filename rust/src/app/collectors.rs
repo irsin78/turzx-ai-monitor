@@ -30,11 +30,11 @@ pub(super) fn every(name: &'static str, interval: Duration, first_delay: Duratio
 }
 
 fn set_ai(st: &Shared, cache: &Cache, name: &'static str, r: anyhow::Result<Usage>) {
-    let mut s = st.lock().unwrap();
     match r {
         Ok(u) => {
             log::info!("{name} usage: {u:?}");
-            cache.store(name, &u);
+            cache.store(name, &u); // file I/O before taking the lock the frame loop renders under
+            let mut s = st.lock().unwrap();
             s.ai.insert(name, u);
             s.ai_err.remove(name);
         }
@@ -42,7 +42,7 @@ fn set_ai(st: &Shared, cache: &Cache, name: &'static str, r: anyhow::Result<Usag
             if e.downcast_ref::<ai::RateLimited>().is_none() {
                 log::warn!("{name} usage failed: {e:#}");
             }
-            s.ai_err.insert(name, AiErr::from(&e)); // keep the last value on screen, show why it is stale
+            st.lock().unwrap().ai_err.insert(name, AiErr::from(&e)); // keep the last value on screen, show why it is stale
         }
     }
 }

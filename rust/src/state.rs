@@ -44,6 +44,8 @@ pub const HIST_KEYS: [&str; 15] = [
 pub struct State {
     pub hw: Hardware,
     pub weather: Option<Weather>,
+    /// Claude Code / Codex sessions that finished or wait for the user
+    pub agents: crate::agent_status::Sessions,
     pub ai: HashMap<&'static str, Usage>,
     pub ai_err: HashMap<&'static str, AiErr>,
     /// One sample per second, oldest first (scrolling graphs)

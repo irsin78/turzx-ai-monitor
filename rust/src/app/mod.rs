@@ -57,6 +57,7 @@ fn backoff(attempts: u32) -> Duration {
 pub fn run(ai_enabled: bool) -> ! {
     let st: Shared = Arc::new(Mutex::new(State::new()));
     start_collectors(&st, ai_enabled);
+    crate::agent_status::listen(&st, crate::config::get().agent_status_port);
     let ending = watch_end_session();
     let beat = start_watchdog();
     let mut panel: Option<lcd::Lcd> = None;
