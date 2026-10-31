@@ -28,6 +28,9 @@ pub struct Usage {
     /// Non-secret plan fields as the service reports them (`plan_label` turns them into a name)
     #[serde(default)]
     pub plan: Value,
+    /// Codex: rate-limit reset credits ("refill coupons") left
+    #[serde(default)]
+    pub coupons: u64,
 }
 
 /// Claude's plan from its login file: only the two plan fields are kept, never the tokens.
@@ -231,7 +234,7 @@ pub fn parse_usage_screen(text: &str, now_utc: chrono::DateTime<chrono::Utc>) ->
     };
     let (session, session_reset) = section("Current session");
     let (weekly, weekly_reset) = section("Current week (all models)");
-    Usage { session, session_reset, weekly, weekly_reset, source: "cli".into(), plan: Value::Null }
+    Usage { session, session_reset, weekly, weekly_reset, source: "cli".into(), plan: Value::Null, coupons: 0 }
 }
 
 /// "2:39am" (next occurrence) or "Oct 7, 12:59am" (this year, else next) -> epoch seconds.
@@ -393,6 +396,7 @@ pub fn codex() -> Result<Usage> {
         weekly_reset: s["reset_at"].as_f64(),
         source: "api".into(),
         plan: json!({"plan_type": plan_field(&r.body, "plan_type")}),
+        coupons: r.body["rate_limit_reset_credits"]["available_count"].as_u64().unwrap_or(0),
     })
 }
 

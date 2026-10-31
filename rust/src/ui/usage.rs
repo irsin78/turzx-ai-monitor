@@ -21,6 +21,25 @@ pub(super) fn segmented_bar(cv: &mut Canvas, x: f32, y: f32, w: f32, h: f32, pct
     }
 }
 
+/// An outlined ticket (notched sides, perforation) and `count` after it, if it fits before `right`.
+fn draw_coupons(cv: &mut Canvas, x: f32, y: f32, count: u64, color: Rgb, right: f32) {
+    let f = num(14.0, Face::NumSemi);
+    let label = count.to_string();
+    if x + 22.0 + cv.text_len(&label, f) > right {
+        return;
+    }
+    cv.line(
+        &[(x, y + 2.0), (x + 17.0, y + 2.0), (x + 17.0, y + 5.0), (x + 15.0, y + 7.0), (x + 17.0, y + 9.0), (x + 17.0, y + 12.0),
+          (x, y + 12.0), (x, y + 9.0), (x + 2.0, y + 7.0), (x, y + 5.0), (x, y + 2.0)],
+        1.5,
+        color,
+    );
+    for dy in [4.0, 7.0, 10.0] {
+        cv.rect(x + 11.0, y + dy, x + 12.0, y + dy + 1.0, color);
+    }
+    cv.text(x + 22.0, y - 1.0, &label, f, color);
+}
+
 /// Strips under the AI names where the mascots roam (Claude, Codex, Antigravity).
 pub fn mascot_areas() -> [crate::mascot::Area; 3] {
     let x = COL_C.0;
@@ -46,11 +65,16 @@ pub(super) fn draw_ai(cv: &mut Canvas, st: &State, x: f32, top: f32) {
         cv.text(x + 16.0, y + 5.0, name, f_name, INK);
         let u = st.ai.get(name);
         // plan name after the service name, smaller until it fits before the first column
+        let mut px = x + 16.0 + cv.text_len(name, f_name) + 8.0;
         if let Some(plan) = u.and_then(|u| crate::sources::ai::plan_label(name, &u.plan)) {
-            let px = x + 16.0 + cv.text_len(name, f_name) + 8.0;
             if let Some(f) = [14.0, 13.0, 12.0, 11.0].map(|s| num(s, Face::NumSemi)).into_iter().find(|&f| px + cv.text_len(&plan, f) <= c1 - 10.0) {
                 cv.text(px, y + 15.0, &plan, f, MUTED);
+                px += cv.text_len(&plan, f) + 8.0;
             }
+        }
+        // Codex refill coupons: a ticket and how many
+        if let Some(n) = u.map(|u| u.coupons).filter(|&n| n > 0) {
+            draw_coupons(cv, px, y + 16.0, n, color, c1 - 10.0);
         }
         let err = st.ai_err.get(name);
         if let (Some(e), None) = (err, u) {
