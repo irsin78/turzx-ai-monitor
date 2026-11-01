@@ -31,6 +31,7 @@ pub struct Config {
     pub fans: Fans,
     pub disks: Disks,
     pub offline: Offline,
+    pub api_cost: ApiCost,
     pub debug: Debug,
 }
 
@@ -45,6 +46,18 @@ pub struct Offline {
     pub videos: String,
     /// command run before the video is made (e.g. something that fills the clip folder)
     pub fetch: String,
+}
+
+/// Gemini API spend this month, read from a Google Cloud budget's Pub/Sub notifications
+/// (`sources::api_cost`); off while `subscription` is empty or the key file is missing.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ApiCost {
+    /// "projects/<project id>/subscriptions/<subscription>"
+    pub subscription: String,
+    /// service account key (JSON) allowed to read that subscription; empty = gcp-key.json
+    /// next to config.toml
+    pub key_file: String,
 }
 
 /// Names shown next to the AI names, keyed by the plan value the service reports; values that
@@ -148,6 +161,7 @@ impl Default for Config {
             fans: Fans { labels: Vec::new() },
             disks: Disks::default(),
             offline: Offline::default(),
+            api_cost: ApiCost::default(),
             debug: Debug::default(),
         }
     }
@@ -304,6 +318,13 @@ labels = [{disk_labels}]
 # While the PC is off the panel plays a video of upcoming movies, made from TMDB
 # (themoviedb.org, free API key for personal use; also in the settings window)
 tmdb_key = "{tmdb_key}"
+
+[api_cost]
+# Gemini API spend this month under Antigravity, from a Google Cloud budget that sends its
+# notifications to Pub/Sub (see README): the subscription to read and a service account key
+# that may read it (empty = gcp-key.json in this folder). Empty subscription = off.
+subscription = "{cost_sub}"
+key_file = "{cost_key}"
 "#,
         lang = c.language,
         clock = c.clock,
@@ -324,6 +345,8 @@ tmdb_key = "{tmdb_key}"
         disks = c.disks.show.iter().map(|l| format!("{l:?}")).collect::<Vec<_>>().join(", "),
         disk_labels = c.disks.labels.iter().map(|l| format!("{l:?}")).collect::<Vec<_>>().join(", "),
         tmdb_key = c.offline.tmdb_key,
+        cost_sub = c.api_cost.subscription,
+        cost_key = c.api_cost.key_file.replace('\\', "\\\\"),
     )
 }
 

@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use super::Shared;
 use crate::sensors::HardwareReader;
 use crate::sources::ai::{self, Antigravity, Cache, ClaudeCli, Usage};
+use crate::sources::api_cost;
 use crate::sources::weather;
 use crate::state::AiErr;
 
@@ -110,6 +111,34 @@ pub fn start_collectors(st: &Shared, ai_enabled: bool) {
                 }
             })
             .expect("spawn thread");
+    }
+
+    // Gemini API spend, shown under Antigravity
+    if on.antigravity && api_cost::subscription().is_some() {
+        const COST_INTERVAL: f64 = 1800.0; // the budget reports a few times a day
+        let (last, fetched_at) = api_cost::cached();
+        if api_cost::key_file().is_file() {
+            st.lock().unwrap().api_cost = last;
+        }
+        let wait = Duration::from_secs_f64((fetched_at + COST_INTERVAL - ai::now()).max(0.0));
+        let s = st.clone();
+        let mut logged = None;
+        every("api-cost", Duration::from_secs_f64(COST_INTERVAL), wait, move || match api_cost::fetch() {
+            Ok(c) => {
+                let key = c.as_ref().map(|c| (c.interval_start, c.published));
+                if let Some(c) = c.as_ref().filter(|_| key != logged) {
+                    log::info!("Gemini API cost: {:.2} {} (period from {:.0})", c.amount, c.currency, c.interval_start);
+                }
+                logged = key;
+                s.lock().unwrap().api_cost = c;
+            }
+            Err(e) => {
+                if e.downcast_ref::<api_cost::NoKey>().is_some() {
+                    s.lock().unwrap().api_cost = None; // key removed: the line goes too
+                }
+                log::warn!("Gemini API cost failed: {e:#}");
+            }
+        });
     }
 
     if on.codex {

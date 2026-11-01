@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use crate::sources::ai::{HttpStatus, RateLimited, Usage};
+use crate::sources::ai::{HttpStatus, RateLimited, SignedOut, Usage};
 use crate::sensors::Hardware;
 use crate::ui::HIST_LEN;
 use crate::sources::weather::Weather;
@@ -13,6 +13,8 @@ pub const AI_NAMES: [&str; 3] = ["Claude", "Codex", "Antigravity"];
 #[derive(Clone, Debug)]
 pub enum AiErr {
     RateLimited(f64),
+    /// HTTP 401 or a CLI without a plan login: sign in again
+    SignedOut,
     Http(u16),
     Other(String),
 }
@@ -21,6 +23,8 @@ impl AiErr {
     pub fn from(e: &anyhow::Error) -> Self {
         if let Some(r) = e.downcast_ref::<RateLimited>() {
             AiErr::RateLimited(r.0)
+        } else if e.downcast_ref::<SignedOut>().is_some() || e.downcast_ref::<HttpStatus>().is_some_and(|h| h.0 == 401) {
+            AiErr::SignedOut
         } else if let Some(h) = e.downcast_ref::<HttpStatus>() {
             AiErr::Http(h.0)
         } else if let Some(h) = e.downcast_ref::<ureq::Error>() {
@@ -48,6 +52,8 @@ pub struct State {
     pub agents: crate::agent_status::Sessions,
     pub ai: HashMap<&'static str, Usage>,
     pub ai_err: HashMap<&'static str, AiErr>,
+    /// Gemini API spend this month (Google Cloud budget), when set up
+    pub api_cost: Option<crate::sources::api_cost::ApiCost>,
     /// One sample per second, oldest first (scrolling graphs)
     pub hist: HashMap<&'static str, VecDeque<Option<f64>>>,
     /// Per-core CPU usage, same layout as `hist`

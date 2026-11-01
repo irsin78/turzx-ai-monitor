@@ -1648,6 +1648,7 @@ version = "0.1.6"
 dependencies = [
  "ab_glyph",
  "anyhow",
+ "base64",
  "cbc",
  "chrono",
  "chrono-tz",
@@ -1662,6 +1663,7 @@ dependencies = [
  "nvml-wrapper",
  "portable-pty",
  "regex",
+ "ring",
  "serde",
  "serde_json",
  "sysinfo",

@@ -114,6 +114,17 @@ impl std::fmt::Display for HttpStatus {
 }
 impl std::error::Error for HttpStatus {}
 
+/// The CLI is not signed in to a plan (login screen, or an API-billing login whose /usage has
+/// no plan limits): the user has to sign in again.
+#[derive(Debug)]
+pub struct SignedOut;
+impl std::fmt::Display for SignedOut {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "not signed in to a plan")
+    }
+}
+impl std::error::Error for SignedOut {}
+
 pub fn now() -> f64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs_f64()
 }
@@ -122,11 +133,11 @@ fn home() -> PathBuf {
     PathBuf::from(std::env::var("USERPROFILE").unwrap_or_default())
 }
 
-fn local_appdata() -> PathBuf {
+pub(crate) fn local_appdata() -> PathBuf {
     PathBuf::from(std::env::var("LOCALAPPDATA").unwrap_or_default())
 }
 
-fn agent() -> ureq::Agent {
+pub(crate) fn agent() -> ureq::Agent {
     ureq::Agent::config_builder()
         .http_status_as_error(false)
         .timeout_global(Some(Duration::from_secs(15)))
@@ -336,8 +347,17 @@ impl ClaudeCli {
             // prompt may come right after "─".
             let prompt = Regex::new(r"(?m)(?:^|─)\s*(?:❯|>)\s").unwrap();
             let trust = |s: &str| s.to_lowercase().contains("trust this folder");
-            if !wait_for(&|s| trust(s) || prompt.is_match(s), 20) {
+            // login screen, "Not logged in · Please run /login", or a header of
+            // "Opus · API Usage Billing" (the plan login was lost)
+            let signed_out = |s: &str| {
+                let s = s.to_lowercase();
+                ["api usage billing", "login method", "run /login", "not logged in"].iter().any(|k| s.contains(k))
+            };
+            if !wait_for(&|s| trust(s) || prompt.is_match(s) || signed_out(s), 20) {
                 bail!("Claude Code did not start");
+            }
+            if signed_out(&text()) {
+                return Err(SignedOut.into());
             }
             if trust(&text()) {
                 send(b"\x1b[B")?; // "Yes, I trust this folder"
@@ -352,7 +372,10 @@ impl ClaudeCli {
             std::thread::sleep(Duration::from_millis(800));
             send(b"\r")?;
             let done = |s: &str| s.contains("Current week") && s.matches("% used").count() >= 2 && s.matches("Resets").count() >= 2;
-            if !wait_for(&done, timeout.as_secs()) {
+            if !wait_for(&|s| done(s) || signed_out(s), timeout.as_secs()) || !done(&text()) {
+                if signed_out(&text()) {
+                    return Err(SignedOut.into());
+                }
                 bail!("no plan usage on /usage screen");
             }
             std::thread::sleep(Duration::from_millis(500)); // let the last line render

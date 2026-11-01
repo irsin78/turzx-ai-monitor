@@ -16,6 +16,8 @@ Windows가 종료되면 패널에 대기 화면을 띄우고, 다음에 켤 때�
 
 - **AI 사용량**: 5시간 한도와 주간 한도의 남은 양, 초기화까지 남은 시간, 요금제 이름(Pro, Max 5x 등).
   초기화되면 바로 다시 조회합니다.
+- **Gemini API 이번 달 비용**: Antigravity 아래에 표시(선택, Google Cloud 예산 사용.
+  [Gemini API 비용](#gemini-api-비용-선택) 참고)
 - **하드웨어**: CPU(코어별 그래프 포함), 메모리, GPU, VRAM 사용률과 기록 그래프, 온도, CPU 패키지·GPU
   보드 전력, 메인보드 팬 2개와 GPU 팬, 네트워크 업·다운로드 속도, 디스크 2개 온도
 - **시계와 달력**(12/24시간) — 사는 나라의 공휴일 표시
@@ -67,7 +69,8 @@ turzx-dashboard run                     # 설치 없이 실행
 `%APPDATA%\TurzxDashboard\config.toml`에 있습니다(설정 창의 *파일 편집…*). 어느 쪽이든 저장하면 대시보드가
 새 설정으로 다시 시작합니다. 항목은 [영어 README](README.md#settings)와 같습니다: 언어, 12/24시간,
 섭씨/화씨, 패널 회전, 도시(또는 위도·경도), 공휴일 나라, 미세먼지 기준, 켤 AI 서비스, 요금제 표시 이름,
-팬 이름, 온도를 볼 디스크, PC가 꺼져 있을 때의 영상(TMDB 키, 영상 폴더, 영상 만들기 전 실행할 명령).
+팬 이름, 온도를 볼 디스크, PC가 꺼져 있을 때의 영상(TMDB 키, 영상 폴더, 영상 만들기 전 실행할 명령),
+Gemini API 비용(`[api_cost]`, 아래 참고).
 
 ## AI 사용량을 읽는 방식
 
@@ -81,12 +84,45 @@ turzx-dashboard run                     # 설치 없이 실행
 
 공개 API가 아니라서 바뀌거나 막힐 수 있습니다. 원하지 않는 서비스는 `[ai]`에서 끄세요.
 
+## Gemini API 비용 (선택)
+
+API 키로는 사용 금액을 조회할 수 없어서, Google Cloud **예산(Budget)** 을 씁니다. 예산은 이번 달 누적
+비용을 하루에 여러 번(쓴 돈이 없어도) Pub/Sub 토픽으로 보내고, 대시보드는 그 메시지를 30분마다 읽어
+Antigravity 아래에 "Gemini API ₩1,234"로 표시합니다. 금액은 결제 계정 통화로 된 Google의 추정치이고 몇
+시간 늦을 수 있으며, 첫 메시지는 몇 시간 걸릴 수 있습니다.
+
+[Google Cloud 콘솔](https://console.cloud.google.com)에서 Gemini API 키가 속한 프로젝트(AI Studio 키는
+`gen-lang-client-…` 프로젝트)로:
+
+1. **결제 → 예산 및 알림 → 예산 만들기**: *알림 전용*(지출 상한은 API를 멈추게 함), 범위는 그 프로젝트,
+   금액은 아무 값(이메일 알림 기준일 뿐). *작업*에서 **이 예산에 Pub/Sub 토픽 연결**을 켜고 그
+   프로젝트에 토픽을 만듭니다.
+2. **Pub/Sub → 구독 → 구독 만들기**: 그 토픽, 전송 유형 *Pull*, 만료 *만료 없음*(PC를 한 달 꺼 둬도
+   지워지지 않게).
+3. **IAM 및 관리자 → 서비스 계정 → 서비스 계정 만들기**: 프로젝트 역할은 주지 않습니다. 그다음 구독의
+   *권한 → 주 구성원 추가* → 서비스 계정 이메일, 역할 **Pub/Sub 구독자**. 이 키로는 그 구독을 읽는 것
+   말고는 아무것도 할 수 없습니다.
+4. 서비스 계정의 **키 → 키 추가 → 새 키 만들기 → JSON**. 파일을
+   `%APPDATA%\TurzxDashboard\gcp-key.json`으로 저장하고 남과 공유하지 마세요.
+5. `config.toml`에:
+
+   ```toml
+   [api_cost]
+   subscription = "projects/<프로젝트 ID>/subscriptions/<구독 이름>"
+   ```
+
+`turzx-dashboard diag api-cost`로 설정을 확인할 수 있습니다(대시보드처럼 쌓인 메시지를 가져갑니다).
+`[ai]`에서 Antigravity를 끄면 이 줄도 나오지 않습니다. 새 달이 시작되면 그 달 첫 보고가 올 때까지 0으로
+표시합니다.
+
 ## 데이터 출처
 
 - 날씨·미세먼지: [Open-Meteo](https://open-meteo.com) (키 불필요). 미세먼지는 측정소 값이 아니라 CAMS 모델 값입니다.
 - 공휴일: 한국은 내장 표, 다른 나라는 [Nager.Date](https://date.nager.at)
 - 영화: [TMDB](https://www.themoviedb.org) (비상업 무료 API 키, 1주일 캐시). This product uses the TMDB API but is
   not endorsed or certified by TMDB.
+- Gemini API 비용(선택): 직접 만든 서비스 계정으로 받는 Google Cloud 결제 예산 알림
+  ([Pub/Sub](https://cloud.google.com/pubsub))
 - 로그: `%LOCALAPPDATA%\TurzxDashboard\dashboard.log`
 
 ## 빌드

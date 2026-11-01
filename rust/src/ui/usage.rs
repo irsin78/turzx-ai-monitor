@@ -35,14 +35,21 @@ pub struct Bubble {
     project: String,
 }
 
-/// The bubbles for the Claude, Codex and Antigravity mascots: a session done or waiting for the user.
+/// The bubbles for the Claude, Codex and Antigravity mascots: a session done or waiting for the
+/// user, else "sign in again" while that service's login is gone.
 pub fn agent_bubbles(st: &State) -> [Option<Bubble>; 3] {
     use crate::agent_status::{Source, Status};
     let t = i18n::get();
     let ai = &config::get().ai;
     let now = std::time::Instant::now();
-    [(Source::Claude, ai.claude), (Source::Codex, ai.codex), (Source::Antigravity, ai.antigravity)].map(|(src, on)| {
-        let s = st.agents.summary(src, now).filter(|_| on)?;
+    [(Source::Claude, ai.claude, AI_NAMES[0]), (Source::Codex, ai.codex, AI_NAMES[1]), (Source::Antigravity, ai.antigravity, AI_NAMES[2])].map(|(src, on, name)| {
+        if !on {
+            return None;
+        }
+        let Some(s) = st.agents.summary(src, now) else {
+            let signed_out = matches!(st.ai_err.get(name), Some(AiErr::SignedOut));
+            return signed_out.then(|| Bubble { waiting: true, label: t.signed_out.into(), project: String::new() });
+        };
         let waiting = s.status == Status::Waiting;
         let more = if s.more > 0 { format!(" +{}", s.more) } else { String::new() };
         Some(Bubble { waiting, label: format!("{}{more}", t.agent[if waiting { 0 } else { 1 }]), project: s.project.to_string() })
@@ -136,7 +143,8 @@ pub(super) fn draw_ai(cv: &mut Canvas, st: &State, x: f32, top: f32) {
             draw_coupons(cv, px, y + 16.0, n, color, c1 - 10.0);
         }
 
-        let err = st.ai_err.get(name);
+        // a lost login is said in the mascot's bubble (agent_bubbles)
+        let err = st.ai_err.get(name).filter(|e| !matches!(e, AiErr::SignedOut));
         if let (Some(e), None) = (err, u) {
             cv.text(c1, y + 8.0, &err_text(e), ko(18.0, false), WARN);
             continue;
@@ -145,6 +153,10 @@ pub(super) fn draw_ai(cv: &mut Canvas, st: &State, x: f32, top: f32) {
             // value is stale; say why under the name
             let t = err_text(e);
             cv.text(x + 16.0, y + 38.0, t.split(" · ").next().unwrap_or(&t), ko(15.0, false), WARN);
+        } else if let Some(c) = st.api_cost.as_ref().filter(|_| *name == "Antigravity") {
+            // Gemini API spend this month, a line under the name (the mascot walks over it)
+            let text = format!("Gemini API {}", crate::sources::api_cost::format(c.current(), &c.currency));
+            cv.text(x + 16.0, y + 38.0, &text, ko(15.0, false), MUTED);
         }
         let cells = match u {
             Some(u) => [(u.session, u.session_reset, None), (u.weekly, u.weekly_reset, u.weekly_extra)],

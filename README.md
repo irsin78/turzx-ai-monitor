@@ -21,6 +21,8 @@ When Windows shuts down, the panel switches to a standby screen and keeps it unt
 
 - **AI plan usage**: what is left of the 5-hour and weekly limits, with the time until each resets,
   and the plan name (Pro, Max 5x, ...). Refreshes right after a reset.
+- **Gemini API spend** this month under Antigravity (optional, from a Google Cloud budget; see
+  [Gemini API spend](#gemini-api-spend-optional)).
 - **Hardware**: CPU (with per-core graphs), memory, GPU and VRAM usage with history graphs,
   temperatures, CPU package and GPU board power, two board fans and the GPU fan, network up/down,
   and the temperature of two disks.
@@ -111,6 +113,10 @@ videos = ""              # clip folder: <name>.mp4 + <name>.json (title, release
                          # overview); empty = %LOCALAPPDATA%\TurzxDashboard\videos; clips win over movie stills
 fetch = ""               # a command run before the video is made, e.g. one that fills the clip folder
 
+[api_cost]               # Gemini API spend this month (see "Gemini API spend" below); empty = off
+subscription = ""        # "projects/<project id>/subscriptions/<subscription>"
+key_file = ""            # service account key (JSON); empty = gcp-key.json next to config.toml
+
 [fans]
 labels = []              # e.g. ["Radiator", "Pump", "GPU"]
 
@@ -132,6 +138,38 @@ anywhere else, and credentials are only read, never written.
 
 These endpoints are not public APIs and may change or stop working. Turn off any of them under `[ai]`.
 
+## Gemini API spend (optional)
+
+An API key cannot be asked what it cost, so the spend comes from a Google Cloud **budget**: the
+budget publishes its accrued cost for the month to a Pub/Sub topic several times a day (also when
+nothing was spent), and the dashboard reads those messages every 30 minutes and shows
+"Gemini API ₩1,234" under Antigravity. The amount is Google's estimate in your billing account's
+currency and can lag by a few hours; the first message can take a few hours to arrive.
+
+In the [Google Cloud console](https://console.cloud.google.com), for the project your Gemini API
+key belongs to (AI Studio keys live in a `gen-lang-client-…` project):
+
+1. **Billing → Budgets & alerts → Create budget**: *Alerts only* (a spend cap would pause the API),
+   scope it to that project, any amount (it only sets the e-mail alert thresholds). Under
+   *Actions*, tick **Connect a Pub/Sub topic to this budget** and create a topic in the project.
+2. **Pub/Sub → Subscriptions → Create subscription** on that topic: delivery *Pull*, expiration
+   *Never expire* (so it survives the PC being off for a month).
+3. **IAM & Admin → Service accounts → Create service account** without any project role. Then on
+   the subscription: *Permissions → Add principal* → the service account's e-mail, role
+   **Pub/Sub Subscriber**. This key can read that subscription and nothing else.
+4. On the service account: **Keys → Add key → Create new key → JSON**. Save the file as
+   `%APPDATA%\TurzxDashboard\gcp-key.json` and keep it private.
+5. In `config.toml`:
+
+   ```toml
+   [api_cost]
+   subscription = "projects/<project id>/subscriptions/<subscription>"
+   ```
+
+`turzx-dashboard diag api-cost` checks the setup (it takes the waiting messages, as the dashboard
+does). The line is drawn only while Antigravity is shown under `[ai]`. Once a new month starts it
+reads 0 until the first report of that month.
+
 ## Data and services
 
 - Weather and air quality: [Open-Meteo](https://open-meteo.com) (no key; city lookup by its geocoding API).
@@ -139,6 +177,8 @@ These endpoints are not public APIs and may change or stop working. Turn off any
 - Holidays: built-in table for Korea, [Nager.Date](https://date.nager.at) for other countries.
 - Movies: [TMDB](https://www.themoviedb.org) (free API key for non-commercial use, cached for a
   week). This product uses the TMDB API but is not endorsed or certified by TMDB.
+- Gemini API spend (optional): Google Cloud Billing budget notifications through
+  [Pub/Sub](https://cloud.google.com/pubsub), with your own service account.
 - Logs: `%LOCALAPPDATA%\TurzxDashboard\dashboard.log`.
 
 ## Build

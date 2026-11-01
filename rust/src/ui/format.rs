@@ -25,7 +25,7 @@ pub(super) fn err_text(e: &AiErr) -> String {
     match e {
         AiErr::RateLimited(until) if *until > epoch_now() + 30.0 => fill(t.rate_limited, fmt_left(Some(*until))),
         AiErr::RateLimited(_) => t.rate_limited_soon.into(),
-        AiErr::Http(401) => t.signed_out.into(),
+        AiErr::SignedOut => t.signed_out.into(),
         AiErr::Http(c) => fill(t.failed, c),
         AiErr::Other(s) => fill(t.failed, s),
     }

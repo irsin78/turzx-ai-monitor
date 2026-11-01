@@ -9,7 +9,7 @@ use crate::sensors::{self as hw};
 use crate::sources::{ai, weather};
 use crate::{mascot, state, ui};
 
-pub const COMMANDS: &str = "usb | sensors | weather | claude-cli | layout | standby | mascots | jpeg-check | profile | fps-test | test-pattern | sd | sd-put | sd-play | sd-stop | encode-test | offline | sd-rm | decode-test | agent-status | agy-raw";
+pub const COMMANDS: &str = "usb | sensors | weather | api-cost | claude-cli | layout | standby | mascots | jpeg-check | profile | fps-test | test-pattern | sd | sd-put | sd-play | sd-stop | encode-test | offline | sd-rm | decode-test | agent-status | agy-raw";
 
 /// Four vertical quarter bands (red, green, blue, white).
 fn test_bands() -> Vec<u8> {
@@ -96,6 +96,11 @@ pub fn run(cmd: &str) -> Result<()> {
         "weather" => {
             println!("{:#?}", weather::fetch()?);
     
+        }
+        "api-cost" => {
+            // takes the waiting budget notifications off the subscription (as the dashboard does)
+            println!("subscription: {}, key file: {}", crate::sources::api_cost::subscription().is_some(), crate::sources::api_cost::key_file().is_file());
+            println!("{:?}", crate::sources::api_cost::fetch()?);
         }
         "claude-cli" => {
             let t = std::time::Instant::now();
@@ -351,7 +356,8 @@ pub fn run(cmd: &str) -> Result<()> {
             println!("{}x{}: {n} frames, last at {last:.2}s, decoded in {:?}", v.width, v.height, t.elapsed());
         }
         "agent-status" => {
-            // the layout preview with a Claude session waiting (and two more), Codex and Antigravity done
+            // the layout preview with a Claude session waiting (and two more), Codex done and
+            // Antigravity signed out
             use crate::agent_status::{Event, Source, Status};
             let mut st = fake_state();
             let now = std::time::Instant::now();
@@ -360,10 +366,11 @@ pub fn run(cmd: &str) -> Result<()> {
                 (Source::Claude, Status::Done, "b", "website"),
                 (Source::Claude, Status::Waiting, "c", "turzx-ai-monitor"),
                 (Source::Codex, Status::Done, "d", "Turzx"),
-                (Source::Antigravity, Status::Done, "e", "agy-test"),
             ] {
                 st.agents.apply(Event { source, event: status, session: session.into(), project: project.into() }, now);
             }
+            st.ai_err.insert("Antigravity", crate::state::AiErr::SignedOut);
+            st.api_cost = Some(crate::sources::api_cost::ApiCost { amount: 12345.0, currency: "KRW".into(), interval_start: crate::sources::ai::now() - 86400.0, published: 0.0 });
             let mut cv = ui::render(&st, chrono::Local::now());
             let areas = ui::mascot_areas();
             let mut m = mascot::Mascots::new(&areas);
