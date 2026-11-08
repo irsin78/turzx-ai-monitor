@@ -37,6 +37,7 @@ const CMD_DELETE: u8 = 42;
 const CMD_PLAY_LOCAL: u8 = 110;
 const CMD_STOP_LOCAL: u8 = 111;
 const CMD_LOCAL_STATE: u8 = 112;
+const CMD_SHOW_LOCAL_JPEG: u8 = 113;
 /// Saved settings: brightness, start mode, 0, rotation, sleep delay, keep-on (app.cfg[0..6]).
 const CMD_CONFIG: u8 = 125;
 pub const CHUNK: usize = 1 << 20;
@@ -293,6 +294,12 @@ impl Lcd {
         Ok(())
     }
 
+    /// Show a JPEG stored on the panel (e.g. /media/logo.jpg, the start-up logo).
+    pub fn show_local_jpeg(&mut self, path: &str) -> Result<()> {
+        self.command_wait(CMD_SHOW_LOCAL_JPEG, &Self::path_args(path), Duration::from_secs(10))?;
+        Ok(())
+    }
+
     /// The panel's local playback state byte (reply[8]).
     pub fn local_state(&mut self) -> Result<u8> {
         Ok(self.command(CMD_LOCAL_STATE)?.get(8).copied().unwrap_or(0))
@@ -335,20 +342,24 @@ impl Lcd {
     /// With the monitor lying landscape the panel shows the portrait framebuffer rotated
     /// 90 degrees CCW, so the image is pre-rotated 90 degrees CW (CCW with `rotation = 180`).
     pub fn show_landscape(&mut self, rgb: &[u8]) -> Result<()> {
-        let mut portrait = rotate_cw(rgb, HEIGHT, WIDTH);
-        if crate::config::get().rotation == 180 {
-            // CW then 180 = CCW: reverse the pixel order
-            let n = portrait.len() / 3;
-            for i in 0..n / 2 {
-                for c in 0..3 {
-                    portrait.swap(i * 3 + c, (n - 1 - i) * 3 + c);
-                }
-            }
-        }
-        let jpeg = encode_jpeg(&portrait, WIDTH, HEIGHT)?;
-        self.send_jpeg(&jpeg)?;
+        self.send_jpeg(&landscape_jpeg(rgb)?)?;
         Ok(())
     }
+}
+
+/// A landscape 1920x480 RGB image as the panel's portrait JPEG (see `Lcd::show_landscape`).
+pub fn landscape_jpeg(rgb: &[u8]) -> Result<Vec<u8>> {
+    let mut portrait = rotate_cw(rgb, HEIGHT, WIDTH);
+    if crate::config::get().rotation == 180 {
+        // CW then 180 = CCW: reverse the pixel order
+        let n = portrait.len() / 3;
+        for i in 0..n / 2 {
+            for c in 0..3 {
+                portrait.swap(i * 3 + c, (n - 1 - i) * 3 + c);
+            }
+        }
+    }
+    encode_jpeg(&portrait, WIDTH, HEIGHT)
 }
 
 /// Rotate a w x h RGB image 90 degrees clockwise (result is h x w).

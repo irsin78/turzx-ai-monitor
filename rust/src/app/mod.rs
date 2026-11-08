@@ -113,6 +113,13 @@ pub fn run(ai_enabled: bool) -> ! {
                         ),
                         None => log::info!("LCD connected, firmware {}, USB {} speed", p.firmware, p.speed),
                     }
+                    // next start-up picture (a second or so; the panel shows it when it next powers on)
+                    let mut p = p;
+                    match crate::boot::update(&mut p) {
+                        Ok(Some(name)) => log::info!("start-up picture: {name}"),
+                        Ok(None) => {}
+                        Err(e) => log::warn!("start-up picture: {e:#}"),
+                    }
                     panel = Some(p);
                     attempts = 0;
                 }

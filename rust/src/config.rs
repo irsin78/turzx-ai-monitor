@@ -31,6 +31,7 @@ pub struct Config {
     pub fans: Fans,
     pub disks: Disks,
     pub offline: Offline,
+    pub boot: Boot,
     pub api_cost: ApiCost,
     pub debug: Debug,
 }
@@ -46,6 +47,15 @@ pub struct Offline {
     pub videos: String,
     /// command run before the video is made (e.g. something that fills the clip folder)
     pub fetch: String,
+}
+
+/// The panel's start-up picture (`boot`).
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct Boot {
+    /// folder of pictures, one of which is picked at random each time the panel connects;
+    /// empty = `%LOCALAPPDATA%\TurzxDashboard\boot`
+    pub images: String,
 }
 
 /// Gemini API spend this month, read from a Google Cloud budget's Pub/Sub notifications
@@ -161,6 +171,7 @@ impl Default for Config {
             fans: Fans { labels: Vec::new() },
             disks: Disks::default(),
             offline: Offline::default(),
+            boot: Boot::default(),
             api_cost: ApiCost::default(),
             debug: Debug::default(),
         }
@@ -319,6 +330,12 @@ labels = [{disk_labels}]
 # (themoviedb.org, free API key for personal use; also in the settings window)
 tmdb_key = "{tmdb_key}"
 
+[boot]
+# Start-up picture: each time the panel connects, a random .jpg/.png from this folder becomes
+# what the panel shows when it next powers on (empty = %LOCALAPPDATA%\TurzxDashboard\boot;
+# no pictures = the panel's own logo)
+images = "{boot_images}"
+
 [api_cost]
 # Gemini API spend this month under Antigravity, from a Google Cloud budget that sends its
 # notifications to Pub/Sub (see README): the subscription to read and a service account key
@@ -345,6 +362,7 @@ key_file = "{cost_key}"
         disks = c.disks.show.iter().map(|l| format!("{l:?}")).collect::<Vec<_>>().join(", "),
         disk_labels = c.disks.labels.iter().map(|l| format!("{l:?}")).collect::<Vec<_>>().join(", "),
         tmdb_key = c.offline.tmdb_key,
+        boot_images = c.boot.images.replace('\\', "\\\\"),
         cost_sub = c.api_cost.subscription,
         cost_key = c.api_cost.key_file.replace('\\', "\\\\"),
     )

@@ -2,6 +2,7 @@
 
 mod agent_status;
 mod app;
+mod boot;
 mod config;
 mod diag;
 mod hooks;

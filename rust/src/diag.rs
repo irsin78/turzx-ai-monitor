@@ -9,7 +9,7 @@ use crate::sensors::{self as hw};
 use crate::sources::{ai, weather};
 use crate::{mascot, state, ui};
 
-pub const COMMANDS: &str = "usb | sensors | weather | api-cost | claude-cli | layout | standby | mascots | jpeg-check | profile | fps-test | test-pattern | sd | sd-put | sd-play | sd-stop | encode-test | offline | sd-rm | decode-test | agent-status | agy-raw";
+pub const COMMANDS: &str = "usb | sensors | weather | api-cost | claude-cli | layout | standby | mascots | jpeg-check | profile | fps-test | test-pattern | sd | sd-put | sd-play | sd-stop | sd-ls | sd-show | boot | encode-test | offline | sd-rm | decode-test | agent-status | agy-raw";
 
 /// Four vertical quarter bands (red, green, blue, white).
 fn test_bands() -> Vec<u8> {
@@ -296,6 +296,34 @@ pub fn run(cmd: &str) -> Result<()> {
             println!("state after: {}", lcd.local_state()?);
         }
         "sd-stop" => lcd::Lcd::open()?.stop_local()?,
+        "sd-ls" => {
+            // list panel directories: TURZX_SD_PATH=<dir/>[;<dir/>...] (a missing one gets created)
+            let mut lcd = lcd::Lcd::open()?;
+            for p in std::env::var("TURZX_SD_PATH")?.split(';').filter(|p| !p.is_empty()) {
+                let mut seen = Vec::new();
+                for r in lcd.list_dir(p)? {
+                    let body = String::from_utf8_lossy(&r[8.min(r.len())..]).trim_end_matches(' ').to_string();
+                    if !body.is_empty() && !seen.contains(&body) {
+                        seen.push(body);
+                    }
+                }
+                println!("--- {p}
+{}", seen.join("
+"));
+            }
+        }
+        "boot" => {
+            // upload a random start-up picture now (as on connect) and show it
+            let mut lcd = lcd::Lcd::open()?;
+            println!("folder {}: {:?}", crate::boot::dir().display(), crate::boot::update(&mut lcd)?);
+            lcd.show_local_jpeg(crate::boot::PANEL_PATH)?;
+        }
+        "sd-show" => {
+            // show a JPEG stored on the panel: TURZX_SD_PATH=<panel path>
+            let remote = std::env::var("TURZX_SD_PATH")?;
+            lcd::Lcd::open()?.show_local_jpeg(&remote)?;
+            println!("shown {remote}");
+        }
         "sd-rm" => {
             // delete panel files: TURZX_SD_PATH=<path>[;<path>...]
             let mut lcd = lcd::Lcd::open()?;
