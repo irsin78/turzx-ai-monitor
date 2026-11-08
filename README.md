@@ -39,6 +39,8 @@ When Windows shuts down, the panel switches to a standby screen and keeps it unt
   with upcoming and current movies (from [TMDB](https://www.themoviedb.org), free API key), or
   your own clips with their details. The dashboard makes it every day and uploads it in the
   background; at shutdown it starts it (the panel must keep getting power).
+- **Your own start-up picture**: put pictures in a folder and the panel shows one of them, picked
+  at random, when it powers on instead of the TURZX logo (see `[boot]` below).
 - **Mounted upside down?** `rotation = 180` turns the picture around.
 
 ## Requirements
@@ -112,6 +114,12 @@ tmdb_key = ""            # TMDB API key for the movies (also in the settings win
 videos = ""              # clip folder: <name>.mp4 + <name>.json (title, release, now_playing, rating,
                          # overview); empty = %LOCALAPPDATA%\TurzxDashboard\videos; clips win over movie stills
 fetch = ""               # a command run before the video is made, e.g. one that fills the clip folder
+
+[boot]                   # the panel's start-up picture (only here, not in the settings window)
+images = ""              # folder of .jpg/.png, scaled to cover 1920x480; empty = %LOCALAPPDATA%\TurzxDashboard\boot.
+                         # Each time the panel connects (about 3 s) a random one, not the last one, is uploaded
+                         # to the panel's flash; it shows when the panel next powers on. No pictures = the panel's
+                         # own logo is left alone (to get it back, also delete /usr/data/boot.jpg: `diag sd-rm`)
 
 [api_cost]               # Gemini API spend this month (see "Gemini API spend" below); empty = off
 subscription = ""        # "projects/<project id>/subscriptions/<subscription>"

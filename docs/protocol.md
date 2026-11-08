@@ -34,8 +34,17 @@ sit in the IN pipe after a reconnect, so drain it after opening.
 | 10 | firmware version (ASCII at reply[8..40]) |
 | 101 | show a JPEG: length big-endian at header[8..12], file bytes appended after the block |
 | 102 | show a PNG (same layout); must be RGBA, an RGB PNG fills only part of the screen |
+| 113 | show a JPEG stored on the panel: path length big-endian at header[8..12], path from header[16] |
 
 Seen in the vendor app but not verified: 12 shutdown, 13 rotate, 14 brightness, 111 stop, 125 config.
+
+## Start-up picture
+
+When the panel powers on its program plays `/media/boot.h264` if present (not on this unit), then
+shows `/usr/data/boot.jpg` if it exists, else the factory `/media/logo.jpg`. Files are written with
+commands 38/39 (or 40 for small files), which take the path as given, so uploading a portrait
+480×1920 JPEG to `/usr/data/boot.jpg` replaces the logo; deleting it (42) brings the logo back.
+The firmware has no command to read, copy or rename a file.
 
 ## Images
 
