@@ -188,7 +188,10 @@ fn shortcut(name: &str, target: &Path, args: &str, description: &str) -> Result<
     Ok(())
 }
 
-/// Scheduled task: at logon, highest privileges, no time limit, restart on failure.
+/// Scheduled task: at logon, highest privileges, no time limit, restart on failure. A second
+/// trigger every 5 minutes starts it again if something ended it from outside (RestartOnFailure
+/// only retries a failed start, and a kill takes the supervisor down with the worker); while it
+/// runs, IgnoreNew makes that trigger a no-op.
 fn create_task(exe: &Path) -> Result<()> {
     let user = format!("{}\\{}", std::env::var("USERDOMAIN").unwrap_or_default(), std::env::var("USERNAME").unwrap_or_default());
     let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
@@ -196,7 +199,10 @@ fn create_task(exe: &Path) -> Result<()> {
         r#"<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo><Description>{APP}: dashboard for the TURZX USB LCD</Description></RegistrationInfo>
-  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>{user}</UserId><Delay>PT10S</Delay></LogonTrigger></Triggers>
+  <Triggers>
+    <LogonTrigger><Enabled>true</Enabled><UserId>{user}</UserId><Delay>PT10S</Delay></LogonTrigger>
+    <TimeTrigger><Enabled>true</Enabled><StartBoundary>2020-01-01T00:00:00</StartBoundary><Repetition><Interval>PT5M</Interval><StopAtDurationEnd>false</StopAtDurationEnd></Repetition></TimeTrigger>
+  </Triggers>
   <Principals><Principal id="Author"><UserId>{user}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>HighestAvailable</RunLevel></Principal></Principals>
   <Settings>
     <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
