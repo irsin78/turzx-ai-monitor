@@ -61,7 +61,8 @@ When Windows shuts down, the panel switches to a standby screen and keeps it unt
    `%LOCALAPPDATA%\Programs\TurzxDashboard`, adds Start menu shortcuts and an entry in
    *Settings → Apps*, starts with Windows and starts now.
    - With PawnIO installed, autostart is a scheduled task with administrator rights (one UAC
-     prompt during install, none at logon) so all sensors work.
+     prompt during install, none at logon) so all sensors work. The task also checks every
+     5 minutes and starts the dashboard again if something ended it.
    - Without PawnIO it uses the normal startup list (no prompt).
 
 From a terminal:
