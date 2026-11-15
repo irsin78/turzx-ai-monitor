@@ -108,9 +108,9 @@ pub(super) fn draw_sun(cv: &mut Canvas, w: &Weather, min_x: f32, y: f32, right: 
 pub(super) const TOMORROW_W: f32 = 145.0; // tomorrow block, from its left edge to the column's right edge
 pub(super) const TOMORROW_ICON_R: f32 = 20.0; // half the width of the small weather icon
 
-pub(super) fn draw_weather(cv: &mut Canvas, st: &State, x: f32, y: f32, right: f32) {
+pub(super) fn draw_weather(cv: &mut Canvas, weather: Option<&Weather>, x: f32, y: f32, right: f32) {
     let s = i18n::get();
-    let Some(w) = &st.weather else {
+    let Some(w) = weather else {
         cv.text(x, y + 20.0, s.loading, ko(22.0, false), MUTED);
         return;
     };

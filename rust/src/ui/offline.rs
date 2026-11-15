@@ -10,7 +10,7 @@ use tiny_skia::{GradientStop, LinearGradient, PixmapPaint, Point, Rect, SpreadMo
 use super::*;
 
 /// Width of the date/calendar panel; the movies take the rest.
-const LEFT: u32 = 540;
+const LEFT: u32 = 610;
 const RIGHT_W: u32 = W - LEFT;
 pub const SLIDE_S: f32 = 6.0;
 const FADE_S: f32 = 0.6;
@@ -28,45 +28,38 @@ pub struct Slide {
 /// The parts that stay the same for the whole video: background, date and calendar, today's
 /// and tomorrow's weather, credit.
 pub fn offline_base(now: &DateTime<Local>, weather: Option<&crate::sources::weather::Weather>) -> Canvas {
-    let mut cv = Canvas::background();
-    let t = i18n::get();
-    let (x, w) = (48.0, LEFT as f32 - 96.0);
-    let date = now.format_localized(t.date, t.locale).to_string();
-    let f = fit_ko(&cv, &date, &[34.0, 30.0, 26.0, 22.0], false, w);
-    cv.text(x, 46.0, &date, f, INK);
-    draw_calendar(&mut cv, now, x, 116.0, w);
-    if let Some(wt) = weather {
-        let today = crate::sources::weather::Forecast { code: wt.code, t_min: wt.t_min, t_max: wt.t_max, rain_prob: wt.rain_prob };
-        draw_day(&mut cv, x, 350.0, w / 2.0 - 12.0, t.today, &today);
-        if let Some(tm) = &wt.tomorrow {
-            draw_day(&mut cv, x + w / 2.0 + 12.0, 350.0, w / 2.0 - 12.0, t.tomorrow, tm);
-        }
-    }
-    cv.text(x, 452.0, "Movies: TMDB", ko(12.0, false), FAINT);
-    cv
+    offline_base_days(now, weather, crate::sources::holidays::month(now.year(), now.month()))
 }
 
-/// One day's forecast in `width` px: heading, icon, weather, low / high and rain.
-fn draw_day(cv: &mut Canvas, x: f32, y: f32, width: f32, heading: &str, d: &crate::sources::weather::Forecast) {
-    let s = i18n::get();
-    if s.tomorrow_caps {
-        cv.caps(x, y, heading, 13.0, Some(MUTED), 2.0, false);
-    } else {
-        cv.text(x, y - 3.0, heading, ko(15.0, false), MUTED);
+fn offline_base_days(now: &DateTime<Local>, weather: Option<&Weather>, holidays: u32) -> Canvas {
+    let mut cv = Canvas::background();
+    cv.rect(0.0, 0.0, LEFT as f32, H as f32, [17, 25, 36]);
+    let t = i18n::get();
+    let (x, right) = COL_A;
+    let cal_x = right - 210.0;
+    let width = cal_x - 24.0 - x;
+    let date = now.format_localized(t.date, t.locale).to_string();
+    let mut f = ko(22.0, false);
+    for size in [38.0, 34.0, 30.0, 26.0, 22.0] {
+        f = ko(size, false);
+        if wrap(&cv, &date, f, width, usize::MAX).len() <= 3 {
+            break;
+        }
     }
-    weather_icon(cv, x + 22.0, y + 52.0, wx::icon(d.code, false), 0.42);
-    let tx = x + 54.0;
-    let label = s.weather_label(d.code);
-    cv.text(tx, y + 24.0, label, fit_ko(cv, label, &[17.0, 16.0, 15.0, 14.0, 13.0], false, width - 54.0), INK);
-    let dg = |c: f64| format!("{:.0}°", deg(c));
-    let temps = format!("{} / {}", dg(d.t_min), dg(d.t_max));
-    let tf = num(19.0, Face::Num);
-    cv.text(tx, y + 50.0, &temps, tf, SOFT);
-    if let Some(p) = d.rain_prob {
-        let rx = tx + cv.text_len(&temps, tf) + 10.0;
-        let rain = fill(s.rain, p);
-        cv.text(rx, y + 52.0, &rain, fit_ko(cv, &rain, &[16.0, 15.0, 14.0, 13.0], false, x + width - rx), MUTED);
+    for (i, line) in wrap(&cv, &date, f, width, 3).iter().enumerate() {
+        cv.text(x, 64.0 + i as f32 * 50.0, line, f, INK);
     }
+    draw_calendar_days(&mut cv, now, cal_x, TOP, 210.0, holidays);
+    cv.text(x, 236.0, "Movies: TMDB", ko(12.0, false), FAINT);
+    if weather.is_some() {
+        let hm = now.format(if config::get().hour24() { "%H:%M" } else { "%-I:%M %p" }).to_string();
+        let stamp = fill(t.weather_as_of, hm);
+        let f = fit_ko(&cv, &stamp, &[14.0, 13.0, 12.0], false, 300.0);
+        cv.text(right - cv.text_len(&stamp, f), 236.0, &stamp, f, MUTED);
+    }
+    cv.line(&[(x, 262.0), (right, 262.0)], 1.0, RULE);
+    draw_weather(&mut cv, weather, x, 284.0, right);
+    cv
 }
 
 /// Seconds of video for `n` movies.
@@ -174,11 +167,16 @@ pub struct Clip {
 /// Everything but the video for one clip: the calendar and the movie's details on the right.
 pub fn clip_base(now: &DateTime<Local>, weather: Option<&crate::sources::weather::Weather>, c: &Clip) -> Canvas {
     let mut cv = offline_base(now, weather);
+    draw_clip_details(&mut cv, c);
+    cv
+}
+
+fn draw_clip_details(cv: &mut Canvas, c: &Clip) {
     let x = (LEFT + CLIP_W) as f32 + 34.0;
     let w = (W - LEFT - CLIP_W) as f32 - 68.0;
     let mut y = 52.0;
     let tf = ko(32.0, true);
-    for line in wrap(&cv, &c.title, tf, w, 2) {
+    for line in wrap(cv, &c.title, tf, w, 2) {
         cv.text(x, y, &line, tf, INK);
         y += 44.0;
     }
@@ -187,11 +185,10 @@ pub fn clip_base(now: &DateTime<Local>, weather: Option<&crate::sources::weather
     y += 50.0;
     let of = ko(18.0, false);
     let lines = ((440.0 - y) / 28.0).max(0.0) as usize;
-    for line in wrap(&cv, &c.overview, of, w, lines) {
+    for line in wrap(cv, &c.overview, of, w, lines) {
         cv.text(x, y, &line, of, SOFT);
         y += 28.0;
     }
-    cv
 }
 
 /// One frame: `base` from `clip_base` with a video frame, faded in by `fade` (0..1).
@@ -212,6 +209,51 @@ pub fn clip_frame(base: &Canvas, frame: &Pixmap, fade: f32) -> Canvas {
         cv.pm.fill_rect(Rect::from_xywh(LEFT as f32, 0.0, (W - LEFT) as f32, h).unwrap(), &p, Transform::identity(), None);
     }
     cv
+}
+
+/// Synthetic clip/still previews, including the missing-weather paths, without network or USB.
+pub fn offline_preview() -> (Canvas, Canvas) {
+    use chrono::{NaiveTime, TimeZone};
+
+    let now = Local.with_ymd_and_hms(2026, 11, 16, 15, 42, 0).single().unwrap();
+    let weather = Weather {
+        temp: 18.0, feels: 17.0, humidity: 62, code: 2, night: false,
+        t_min: 11.0, t_max: 21.0, rain_prob: Some(30),
+        tomorrow: Some(wx::Forecast { code: 61, t_min: 10.0, t_max: 19.0, rain_prob: Some(80) }),
+        sunrise: NaiveTime::from_hms_opt(7, 12, 0), sunset: NaiveTime::from_hms_opt(17, 23, 0),
+        pm25: Some(12.0), pm10: Some(24.0), aqi25: Some(50.0), aqi10: Some(22.0),
+    };
+    let clip = Clip {
+        title: "The Last Observatory Beyond the Edge of Tomorrow: A Journey Through the Stars".into(),
+        now_playing: false, release: "2026-11-28".into(), rating: 8.2,
+        overview: "When a forgotten observatory receives a signal from the far side of the galaxy, a young astronomer and an unlikely crew set out to discover who sent it. Their journey across distant worlds reveals a mystery that could change the future of everyone they left behind.".into(),
+    };
+    let gradient = |w: u32, h: u32, backdrop: bool| {
+        let mut pm = Pixmap::new(w, h).unwrap();
+        for (i, px) in pm.pixels_mut().iter_mut().enumerate() {
+            let (x, y) = (i as u32 % w, i as u32 / w);
+            let (a, b) = ((x * 160 / (w - 1)) as u8, (y * 120 / (h - 1)) as u8);
+            let c = if backdrop { [30 + b, 45 + a, 100 + b] } else { [35 + a, 55 + b, 160 - b] };
+            *px = tiny_skia::PremultipliedColorU8::from_rgba(c[0], c[1], c[2], 255).unwrap();
+        }
+        pm
+    };
+    let frame = gradient(1280, 720, false);
+    let slides = [Slide {
+        title: clip.title.clone(), now_playing: clip.now_playing, release: clip.release.clone(),
+        rating: clip.rating, overview: clip.overview.clone(), image: gradient(1600, 900, true),
+    }];
+    // Supply holiday bits directly so the calendar cannot start a background holiday fetch.
+    let base = offline_base_days(&now, Some(&weather), 0);
+    let mut clip_base = base.clone();
+    draw_clip_details(&mut clip_base, &clip);
+    let preview_clip = clip_frame(&clip_base, &frame, 1.0);
+    let preview_still = offline_frame(&base, &slides, 3.0);
+    let mut empty = offline_base_days(&now, None, 0);
+    let _ = offline_frame(&empty, &slides, 3.0);
+    draw_clip_details(&mut empty, &clip);
+    let _ = clip_frame(&empty, &frame, 1.0);
+    (preview_clip, preview_still)
 }
 
 /// `text` broken into at most `max_lines` lines of `width` px (the last one cut with "…").

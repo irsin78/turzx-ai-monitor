@@ -9,7 +9,7 @@ use crate::sensors::{self as hw};
 use crate::sources::{ai, weather};
 use crate::{mascot, state, ui};
 
-pub const COMMANDS: &str = "usb | sensors | weather | api-cost | claude-cli | layout | standby | mascots | jpeg-check | profile | fps-test | test-pattern | sd | sd-put | sd-play | sd-stop | sd-ls | sd-show | boot | encode-test | offline | sd-rm | decode-test | agent-status | agy-raw";
+pub const COMMANDS: &str = "usb | sensors | weather | api-cost | claude-cli | layout | offline-preview | standby | mascots | jpeg-check | profile | fps-test | test-pattern | sd | sd-put | sd-play | sd-stop | sd-ls | sd-show | boot | encode-test | offline | sd-rm | decode-test | agent-status | agy-raw";
 
 /// Four vertical quarter bands (red, green, blue, white).
 fn test_bands() -> Vec<u8> {
@@ -115,6 +115,12 @@ pub fn run(cmd: &str) -> Result<()> {
             cv.save_png("preview_rust.png")?;
             println!("rendered in {dt:?}, saved preview_rust.png");
     
+        }
+        "offline-preview" => {
+            let (clip, still) = ui::offline_preview();
+            clip.save_png("offline_preview_clip.png")?;
+            still.save_png("offline_preview_still.png")?;
+            println!("saved offline_preview_clip.png and offline_preview_still.png (including no-weather render check)");
         }
         "standby" => {
             for i in 0..3 {

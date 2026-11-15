@@ -32,6 +32,11 @@ pub(super) fn draw_clock(cv: &mut Canvas, now: &DateTime<Local>, x: f32, right: 
 }
 
 pub(super) fn draw_calendar(cv: &mut Canvas, now: &DateTime<Local>, x: f32, y: f32, w: f32) {
+    draw_calendar_days(cv, now, x, y, w, crate::sources::holidays::month(now.year(), now.month()));
+}
+
+/// Calendar with supplied holidays; synthetic previews need no background network fetch.
+pub(super) fn draw_calendar_days(cv: &mut Canvas, now: &DateTime<Local>, x: f32, y: f32, w: f32, holidays: u32) {
     let t = i18n::get();
     let cw = w / 7.0;
     let month = match (t.month_names, t.month_en) {
@@ -56,7 +61,6 @@ pub(super) fn draw_calendar(cv: &mut Canvas, now: &DateTime<Local>, x: f32, y: f
         let (ny, nm) = if now.month() == 12 { (now.year() + 1, 1) } else { (now.year(), now.month() + 1) };
         chrono::NaiveDate::from_ymd_opt(ny, nm, 1).unwrap().pred_opt().unwrap().day() as usize
     };
-    let holidays = crate::sources::holidays::month(now.year(), now.month());
     for day in 1..=days {
         let cell = lead + day - 1;
         let (r, i) = (cell / 7, cell % 7);

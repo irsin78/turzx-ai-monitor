@@ -19,7 +19,7 @@ mod usage;
 mod weather;
 
 pub use canvas::Canvas;
-pub use offline::{clip_base, clip_frame, offline_base, offline_frame, offline_len, Clip, Slide, CLIP_FADE_S};
+pub use offline::{clip_base, clip_frame, offline_base, offline_frame, offline_len, offline_preview, Clip, Slide, CLIP_FADE_S};
 pub use standby::{standby, standby_page};
 pub use usage::mascot_areas;
 
@@ -112,7 +112,7 @@ pub fn render(st: &State, now: DateTime<Local>) -> Canvas {
     draw_clock(&mut cv, &now, ax, cal_x - 24.0);
     draw_calendar(&mut cv, &now, cal_x, TOP, 210.0);
     cv.line(&[(ax, 262.0), (ar, 262.0)], 1.0, RULE);
-    draw_weather(&mut cv, st, ax, 284.0, ar);
+    draw_weather(&mut cv, st.weather.as_ref(), ax, 284.0, ar);
 
     draw_hardware(&mut cv, st, COL_B.0, COL_B.1);
     draw_fans(&mut cv, st, COL_B.0, COL_B.1);
