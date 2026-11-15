@@ -26,18 +26,47 @@ pub fn claude_command(exe: &Path, port: u16) -> String {
     format!("'{exe}' agent-event claude --port {port} {MARKER}")
 }
 fn edit_claude(text: &str, exe: &Path, port: u16, install: bool) -> Result<String> {
+    edit_json_hooks(text, &EVENTS, owned_command, |event| {
+        let command = claude_command(exe, port);
+        if event == "PreToolUse" {
+            json!({"matcher":QUESTION_TOOLS,"hooks":[{"type":"command","command":command,"timeout":2}]})
+        } else {
+            json!({"hooks":[{"type":"command","command":command,"timeout":2}]})
+        }
+    }, install)
+}
+
+fn owned_codex_hook(s: &str) -> bool {
+    s.contains("turzx-dashboard.exe") && s.contains(" agent-event codex --hook-stdin ") && s.ends_with(MARKER)
+}
+
+fn edit_codex_hooks(text: &str, exe: &Path, port: u16, install: bool) -> Result<String> {
+    let path = exe.to_string_lossy().replace('\\', "/");
+    let quoted = path.replace('\'', "'\"'\"'");
+    let windows = path.replace('\'', "''");
+    let args = format!("agent-event codex --hook-stdin --port {port} {MARKER}");
+    edit_json_hooks(text, &["UserPromptSubmit", "Stop"], owned_codex_hook, |_| {
+        json!({"hooks":[{"type":"command","command":format!("'{quoted}' {args}"),
+            "commandWindows":format!("& '{windows}' {args}"),"timeout":2}]})
+    }, install)
+}
+
+fn edit_json_hooks(
+    text: &str, events: &[&str], owned: fn(&str) -> bool,
+    group: impl Fn(&str) -> Value, install: bool,
+) -> Result<String> {
     if !install && text.trim().is_empty() { return Ok(text.into()); }
     let mut root: Value = if text.trim().is_empty() { json!({}) } else { serde_json::from_str(text)? };
-    ensure!(root.is_object(), "Claude settings must be an object");
+    ensure!(root.is_object(), "Hook settings must be an object");
     if let Some(hooks) = root.get_mut("hooks") {
-        let hooks = hooks.as_object_mut().context("Claude hooks must be an object")?;
-        for event in EVENTS {
+        let hooks = hooks.as_object_mut().context("Hooks must be an object")?;
+        for &event in events {
             if let Some(groups) = hooks.get_mut(event) {
-                let groups = groups.as_array_mut().context("Claude event must be an array")?;
+                let groups = groups.as_array_mut().context("Hook event must be an array")?;
                 groups.retain_mut(|group| {
                     if let Some(inner) = group.get_mut("hooks").and_then(Value::as_array_mut) {
                         let before = inner.len();
-                        inner.retain(|h| !h["command"].as_str().is_some_and(owned_command));
+                        inner.retain(|h| !h["command"].as_str().is_some_and(owned));
                         // a group of ours left empty goes, matcher and all
                         return before == inner.len() || !inner.is_empty();
                     }
@@ -47,13 +76,10 @@ fn edit_claude(text: &str, exe: &Path, port: u16, install: bool) -> Result<Strin
         }
     }
     if install {
-        let hooks = root.as_object_mut().unwrap().entry("hooks").or_insert_with(|| json!({})).as_object_mut().context("Claude hooks must be an object")?;
-        for event in EVENTS {
-            hooks.entry(event).or_insert_with(|| json!([])).as_array_mut().context("Claude event must be an array")?
-                .push(match event {
-                    "PreToolUse" => json!({"matcher":QUESTION_TOOLS,"hooks":[{"type":"command","command":claude_command(exe, port),"timeout":2}]}),
-                    _ => json!({"hooks":[{"type":"command","command":claude_command(exe, port),"timeout":2}]}),
-                });
+        let hooks = root.as_object_mut().unwrap().entry("hooks").or_insert_with(|| json!({})).as_object_mut().context("Hooks must be an object")?;
+        for &event in events {
+            hooks.entry(event).or_insert_with(|| json!([])).as_array_mut().context("Hook event must be an array")?
+                .push(group(event));
         }
     }
     // Avoid gratuitous rewrites, including a second installation.
@@ -189,7 +215,11 @@ pub fn command(action: &str, args: &[String]) -> Result<String> {
         "install" | "uninstall" => {
             // the command only matters for an install; an uninstall removes our key whatever it says
             let cmd = if agy_set_up && action == "install" { agy_command(&exe, port)? } else { String::new() };
+            let codex_hooks = codex.with_file_name("hooks.json");
+            let before = read(&codex_hooks)?;
+            let after = edit_codex_hooks(&before, &exe, port, action == "install")?;
             edit_paths(&claude, &codex, agy_set_up.then_some((agy.as_path(), cmd.as_str())), &exe, port, action == "install")?;
+            write(&codex_hooks, &before, &after)?;
             let agy_line = if agy_set_up { agy.display().to_string() } else { "not set up (skipped)".into() };
             Ok(format!("Agent hooks {action} complete.\nClaude: {}\nCodex: {}\nAntigravity: {agy_line}", claude.display(), codex.display()))
         }
@@ -210,6 +240,19 @@ pub fn command(action: &str, args: &[String]) -> Result<String> {
 mod tests {
     use super::*;
     fn exe() -> &'static Path { Path::new("C:/Users/Test User/Programs/TurzxDashboard/turzx-dashboard.exe") }
+    #[test]
+    fn codex_activity_hooks_preserve_existing_groups() {
+        let original = r#"{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"existing"}]}]}}"#;
+        let installed = edit_codex_hooks(original, exe(), 47136, true).unwrap();
+        assert_eq!(edit_codex_hooks(&installed, exe(), 47136, true).unwrap(), installed);
+        let config: Value = serde_json::from_str(&installed).unwrap();
+        assert_eq!(config["hooks"]["UserPromptSubmit"].as_array().unwrap().len(), 2);
+        assert!(config["hooks"]["Stop"][0]["hooks"][0]["commandWindows"].as_str().unwrap().contains("--hook-stdin"));
+        let removed: Value = serde_json::from_str(&edit_codex_hooks(&installed, exe(), 47136, false).unwrap()).unwrap();
+        assert_eq!(removed["hooks"]["UserPromptSubmit"], serde_json::from_str::<Value>(original).unwrap()["hooks"]["UserPromptSubmit"]);
+        assert_eq!(removed["hooks"]["Stop"], json!([]));
+    }
+
     #[test]
     fn claude_preserves_existing_hooks_and_all_other_values() {
         let input = r#"{"custom":[1,true],"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"existing"}]}],"Stop":[{"matcher":"x","hooks":[{"type":"command","command":"stop"}]}]}}"#;

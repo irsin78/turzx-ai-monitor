@@ -5,14 +5,16 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use super::Shared;
+use crate::agent_status::Source;
 use crate::sensors::HardwareReader;
 use crate::sources::ai::{self, Antigravity, Cache, ClaudeCli, Usage};
 use crate::sources::api_cost;
 use crate::sources::weather;
 use crate::state::AiErr;
 
-const AI_INTERVAL: f64 = 300.0; // Codex / Antigravity
-const CLAUDE_INTERVAL: f64 = 300.0; // Claude Code's /usage panel (about 3 s per read)
+const AI_IDLE: Duration = Duration::from_secs(300);
+const AI_ACTIVE: Duration = Duration::from_secs(30);
+const AI_MIN: Duration = Duration::from_secs(15);
 const WEATHER_INTERVAL: Duration = Duration::from_secs(600);
 
 /// Run `f` now (after `first_delay`) and then every `interval`, forever, on its own thread.
@@ -58,6 +60,52 @@ fn until_reset(st: &Shared, name: &str) -> Option<f64> {
     [u.session_reset, u.weekly_reset].into_iter().flatten().filter(|&r| r > now).map(|r| r - now + GRACE).reduce(f64::min)
 }
 
+fn usage_collector(
+    st: &Shared, cache: &Cache, name: &'static str, source: Source,
+    mut fetch: impl FnMut() -> anyhow::Result<Usage> + Send + 'static,
+) {
+    let (cached, fetched_at) = cache.last(name);
+    if let Some(usage) = cached {
+        st.lock().unwrap().ai.insert(name, usage);
+    }
+    let (st, cache) = (st.clone(), cache.clone());
+    thread::Builder::new().name(name.into()).spawn(move || {
+        let mut last_attempt = None::<Instant>;
+        let mut handled_completion = None;
+        let mut backoff_until = None::<Instant>;
+        let mut reset_due = None;
+        let mut retry_after = 0.0;
+        loop {
+            let now = Instant::now();
+            let (active, completed) = st.lock().unwrap().agents.quota_activity(source, now);
+            let completed_pending = completed.is_some() && completed != handled_completion;
+            let interval = if active { AI_ACTIVE } else { AI_IDLE };
+            let age = last_attempt.map_or_else(
+                || Duration::from_secs_f64((ai::now() - fetched_at).clamp(0.0, AI_IDLE.as_secs_f64())),
+                |last| now.saturating_duration_since(last),
+            );
+            let due = age >= interval || age >= AI_MIN &&
+                (completed_pending || reset_due.is_some_and(|at| now >= at));
+            if due && ai::now() >= retry_after && backoff_until.is_none_or(|at| now >= at) {
+                last_attempt = Some(now);
+                handled_completion = completed;
+                let result = fetch();
+                retry_after = result.as_ref().err()
+                    .and_then(|e| e.downcast_ref::<ai::RateLimited>())
+                    .map_or(0.0, |e| e.0);
+                backoff_until = result.as_ref().err().map(|_| {
+                    Instant::now() + if retry_after > 0.0 { AI_MIN } else { AI_IDLE }
+                });
+                set_ai(&st, &cache, name, result);
+                reset_due = if source == Source::Claude {
+                    until_reset(&st, name).map(|secs| Instant::now() + Duration::from_secs_f64(secs))
+                } else { None };
+            }
+            thread::sleep(Duration::from_secs(1));
+        }
+    }).expect("spawn usage thread");
+}
+
 pub fn start_collectors(st: &Shared, ai_enabled: bool) {
     // Hardware every second (also feeds the graph history)
     let s = st.clone();
@@ -78,39 +126,10 @@ pub fn start_collectors(st: &Shared, ai_enabled: bool) {
     if !ai_enabled {
         return; // --no-ai: test runs without touching credentials
     }
-    // AI: show the last saved values right away; don't re-query sooner than the interval
-    // after the previous fetch, even across restarts
     let cache = Cache::open();
-    let first_delay = |name: &str, interval: f64| {
-        let (last, fetched_at) = cache.last(name);
-        let wait = (fetched_at + interval - ai::now()).max(0.0);
-        (last, Duration::from_secs_f64(wait))
-    };
-
     let on = &crate::config::get().ai;
     if on.claude {
-        let (last, wait) = first_delay("Claude", CLAUDE_INTERVAL);
-        if let Some(u) = last {
-            st.lock().unwrap().ai.insert("Claude", u);
-        }
-        let (s, c) = (st.clone(), cache.clone());
-        thread::Builder::new()
-            .name("claude".into())
-            .spawn(move || {
-                thread::sleep(wait);
-                loop {
-                    // Claude Code's own /usage panel: the numbers Claude Code shows (the OAuth
-                    // usage API went on answering with hours-old numbers)
-                    let r = ClaudeCli.fetch(Duration::from_secs(45));
-                    if let Err(e) = &r {
-                        log::warn!("Claude /usage read failed: {e:#}");
-                    }
-                    set_ai(&s, &c, "Claude", r);
-                    let tick = until_reset(&s, "Claude").map_or(CLAUDE_INTERVAL, |r| r.min(CLAUDE_INTERVAL));
-                    thread::sleep(Duration::from_secs_f64(tick));
-                }
-            })
-            .expect("spawn thread");
+        usage_collector(st, &cache, "Claude", Source::Claude, || ClaudeCli.fetch(Duration::from_secs(45)));
     }
 
     // Gemini API spend, shown under Antigravity
@@ -142,21 +161,10 @@ pub fn start_collectors(st: &Shared, ai_enabled: bool) {
     }
 
     if on.codex {
-        let (last, wait) = first_delay("Codex", AI_INTERVAL);
-        if let Some(u) = last {
-            st.lock().unwrap().ai.insert("Codex", u);
-        }
-        let (s, c) = (st.clone(), cache.clone());
-        every("codex", Duration::from_secs_f64(AI_INTERVAL), wait, move || set_ai(&s, &c, "Codex", ai::codex()));
+        usage_collector(st, &cache, "Codex", Source::Codex, ai::codex);
     }
-
     if on.antigravity {
-        let (last, wait) = first_delay("Antigravity", AI_INTERVAL);
-        if let Some(u) = last {
-            st.lock().unwrap().ai.insert("Antigravity", u);
-        }
-        let (s, c) = (st.clone(), cache.clone());
         let mut agy = Antigravity::new();
-        every("antigravity", Duration::from_secs_f64(AI_INTERVAL), wait, move || set_ai(&s, &c, "Antigravity", agy.fetch()));
+        usage_collector(st, &cache, "Antigravity", Source::Antigravity, move || agy.fetch());
     }
 }

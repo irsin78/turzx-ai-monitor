@@ -21,7 +21,7 @@ mod weather;
 pub use canvas::Canvas;
 pub use offline::{clip_base, clip_frame, offline_base, offline_frame, offline_len, Clip, Slide, CLIP_FADE_S};
 pub use standby::{standby, standby_page};
-pub use usage::{agent_bubbles, draw_agent_bubble, mascot_areas, Bubble};
+pub use usage::mascot_areas;
 
 use canvas::*;
 use clock::*;
@@ -76,17 +76,17 @@ fn ai_color(name: &str) -> Rgb {
     }
 }
 
-const COL_A: (f32, f32) = (40.0, 640.0);
-const COL_B: (f32, f32) = (712.0, 1252.0);
-const COL_C: (f32, f32) = (1324.0, 1880.0);
-const RULES_X: [f32; 2] = [676.0, 1288.0];
+const COL_A: (f32, f32) = (30.0, 596.0);
+const COL_B: (f32, f32) = (640.0, 1184.0);
+const COL_C: (f32, f32) = (1244.0, 1888.0);
+const RULES_X: [f32; 2] = [610.0, 1214.0];
 const TOP: f32 = 36.0;
-const BOTTOM: f32 = 444.0;
+const BOTTOM: f32 = 452.0;
 
 /// Pitch of the CPU / memory / GPU / VRAM rows (leaves room for the network and disk row).
-const HW_ROW: f32 = 76.0;
+const HW_ROW: f32 = 62.0;
 pub const GRAPH_W: f32 = 250.0;
-const GRAPH_H: f32 = 56.0;
+const GRAPH_H: f32 = 47.0;
 const GRAPH_STEP: f32 = 2.0;
 pub const HIST_LEN: usize = (GRAPH_W / GRAPH_STEP) as usize + 1;
 
@@ -95,33 +95,32 @@ fn mix(c: Rgb, bg: Rgb, a: f32) -> Rgb {
     [0, 1, 2].map(|i| (c[i] as f32 * a + bg[i] as f32 * (1.0 - a)) as u8)
 }
 
-const AI_C1: f32 = 196.0;
-const AI_C2: f32 = 382.0;
-const AI_TOP: f32 = 150.0;
-const AI_ROW: f32 = 90.0;
+const AI_C1: f32 = 206.0;
+const AI_C2: f32 = 354.0;
+const AI_TOP: f32 = TOP;
+const AI_ROW: f32 = 126.0;
 
 // --- page --------------------------------------------------------------------------------
 
 pub fn render(st: &State, now: DateTime<Local>) -> Canvas {
     let mut cv = Canvas::background();
-    for rx in RULES_X {
-        cv.line(&[(rx, TOP), (rx, BOTTOM)], 1.0, RULE);
-    }
+    cv.rect(0.0, 0.0, 610.0, H as f32, [17, 25, 36]);
+    cv.rect(610.0, 0.0, 1214.0, H as f32, [13, 20, 30]);
+    cv.rect(1214.0, 0.0, W as f32, H as f32, [19, 27, 39]);
     let (ax, ar) = COL_A;
-    let cal_x = ar - 212.0;
+    let cal_x = ar - 210.0;
     draw_clock(&mut cv, &now, ax, cal_x - 24.0);
-    draw_calendar(&mut cv, &now, cal_x, TOP, 212.0);
+    draw_calendar(&mut cv, &now, cal_x, TOP, 210.0);
     cv.line(&[(ax, 262.0), (ar, 262.0)], 1.0, RULE);
     draw_weather(&mut cv, st, ax, 284.0, ar);
 
     draw_hardware(&mut cv, st, COL_B.0, COL_B.1);
-    let (cx, cr) = COL_C;
-    draw_fans(&mut cv, st, cx, cr);
-    cv.line(&[(cx, 130.0), (cr, 130.0)], 1.0, RULE);
-    draw_ai(&mut cv, st, cx, AI_TOP);
+    draw_fans(&mut cv, st, COL_B.0, COL_B.1);
+    draw_ai(&mut cv, st, COL_C.0, AI_TOP);
 
-    cv.glow((ax - 20.0) as u32, 0, (cal_x - 10.0) as u32, 240); // clock
+    // The jade and paper panels use flat backgrounds.
+    /*cv.glow((ax - 20.0) as u32, 0, (cal_x - 10.0) as u32, 240); // clock
     let gx = COL_B.0 + 150.0;
-    cv.glow((gx - 10.0) as u32, (TOP - 10.0) as u32, (gx + GRAPH_W + 10.0) as u32, (TOP + 3.0 * HW_ROW + GRAPH_H + 20.0) as u32);
+    cv.glow((gx - 10.0) as u32, (TOP - 10.0) as u32, (gx + GRAPH_W + 10.0) as u32, (TOP + 3.0 * HW_ROW + GRAPH_H + 20.0) as u32);*/
     cv
 }

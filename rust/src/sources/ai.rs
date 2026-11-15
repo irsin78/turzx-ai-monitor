@@ -4,7 +4,7 @@
 //! unofficial and may change.
 
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -31,7 +31,7 @@ pub struct Usage {
     /// Codex: rate-limit reset credits ("refill coupons") left
     #[serde(default)]
     pub coupons: u64,
-    /// A second weekly limit inside the plan, percent used (Antigravity: Gemini 4 Argon)
+    /// Model-specific weekly usage: Fable for Claude or Argon for Antigravity.
     #[serde(default)]
     pub weekly_extra: Option<f64>,
 }
@@ -239,16 +239,23 @@ fn claude_argv() -> Vec<std::ffi::OsString> {
 ///   Current session ... 22% used / Resets 2:39am (Asia/Seoul)
 ///   Current week (all models) ... 20% used / Resets Oct 7, 12:59am (Asia/Seoul)
 pub fn parse_usage_screen(text: &str, now_utc: chrono::DateTime<chrono::Utc>) -> Usage {
-    let section = |title: &str| -> (Option<f64>, Option<f64>) {
-        let re = Regex::new(&format!(r"(?s){}.*?(\d+(?:\.\d+)?)% used.*?Resets ([^\n(]+?)\s*\(([^)]+)\)", regex::escape(title))).unwrap();
-        match re.captures(text) {
-            Some(c) => (c[1].parse().ok(), reset_time(c[2].trim(), &c[3], now_utc)),
-            None => (None, None),
+    let headers = Regex::new(r"(?im)^[ \t]*Current (?:session|week(?:[ \t]*\([^\r\n)]*\))?)|^[ \t]*Extra usage").unwrap();
+    let percent = Regex::new(r"(\d+(?:\.\d+)?)% used").unwrap();
+    let reset = Regex::new(r"(?i)Resets ([^\n(]+?)\s*\(([^)]+)\)").unwrap();
+    let mut sections = headers.find_iter(text).peekable();
+    let mut usage = Usage { source: "cli".into(), ..Default::default() };
+    while let Some(header) = sections.next() {
+        let body = &text[header.end()..sections.peek().map_or(text.len(), |next| next.start())];
+        let used = percent.captures(body).and_then(|c| c[1].parse().ok());
+        let resets_at = reset.captures(body).and_then(|c| reset_time(c[1].trim(), &c[2], now_utc));
+        match header.as_str().trim().to_ascii_lowercase().as_str() {
+            "current session" => (usage.session, usage.session_reset) = (used, resets_at),
+            "current week (all models)" => (usage.weekly, usage.weekly_reset) = (used, resets_at),
+            "current week (fable)" | "current week (fable only)" => usage.weekly_extra = used,
+            _ => {}
         }
-    };
-    let (session, session_reset) = section("Current session");
-    let (weekly, weekly_reset) = section("Current week (all models)");
-    Usage { session, session_reset, weekly, weekly_reset, source: "cli".into(), plan: Value::Null, ..Default::default() }
+    }
+    usage
 }
 
 /// "2:39am" (next occurrence) or "Oct 7, 12:59am" (this year, else next) -> epoch seconds.
@@ -285,118 +292,76 @@ fn reset_time(when: &str, tz: &str, now_utc: chrono::DateTime<chrono::Utc>) -> O
     Some(dt.timestamp() as f64)
 }
 
-/// Fallback when the usage API fails (CodexBar's "CLI" source): run Claude Code in a hidden
-/// pseudo-console, open /usage, read the panel, quit. /usage does not call a model. Runs in
-/// its own empty folder, whose one-time "trust this folder" prompt is answered Yes.
+/// Read the completed Claude Code usage report from its non-interactive CLI.
 pub struct ClaudeCli;
 
 impl ClaudeCli {
-    const COLS: u16 = 120;
-    const ROWS: u16 = 50;
-
     pub fn fetch(&self, timeout: Duration) -> Result<Usage> {
-        use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+        use std::os::windows::process::CommandExt;
+        use std::process::{Command, Stdio};
+
         let work = local_appdata().join(r"TurzxDashboard\claude-probe");
         std::fs::create_dir_all(&work)?;
-        let pair = native_pty_system().openpty(PtySize { rows: Self::ROWS, cols: Self::COLS, pixel_width: 0, pixel_height: 0 })?;
-        let mut cmd = CommandBuilder::from_argv(claude_argv());
-        cmd.cwd(&work);
-        // Clean environment: never inherit another Claude Code session's variables
-        cmd.env_clear();
-        for (k, v) in std::env::vars_os() {
-            let up = k.to_string_lossy().to_uppercase();
-            if !up.starts_with("CLAUDE") && !up.starts_with("ANTHROPIC") {
-                cmd.env(k, v);
+        let argv = claude_argv();
+        let mut cmd = Command::new(&argv[0]);
+        cmd.args(&argv[1..]).args(["-p", "/usage"])
+            .current_dir(work)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        for (key, _) in std::env::vars_os() {
+            let name = key.to_string_lossy().to_ascii_uppercase();
+            if name.starts_with("CLAUDE") || name.starts_with("ANTHROPIC") {
+                cmd.env_remove(key);
             }
         }
-        let mut child = pair.slave.spawn_command(cmd)?;
-        drop(pair.slave);
-        let parser = Arc::new(Mutex::new(vt100::Parser::new(Self::ROWS, Self::COLS, 0)));
-        let mut reader = pair.master.try_clone_reader()?;
-        let writer = Arc::new(Mutex::new(pair.master.take_writer()?));
-        let (p2, w2) = (parser.clone(), writer.clone());
-        std::thread::spawn(move || {
-            let mut buf = [0u8; 65536];
-            while let Ok(n) = reader.read(&mut buf) {
-                if n == 0 {
-                    break;
+
+        let mut child = cmd.spawn().context("start Claude /usage")?;
+        let stdout = child.stdout.take().expect("piped stdout");
+        let stderr = child.stderr.take().expect("piped stderr");
+        fn read_pipe(pipe: impl Read + Send + 'static) -> std::sync::mpsc::Receiver<std::io::Result<Vec<u8>>> {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let mut output = Vec::new();
+                let result = pipe.take(1024 * 1024).read_to_end(&mut output).map(|_| output);
+                let _ = tx.send(result);
+            });
+            rx
+        }
+        let (stdout, stderr) = (read_pipe(stdout), read_pipe(stderr));
+        let deadline = Instant::now() + timeout;
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
+                result => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    result.context("wait for Claude /usage")?;
+                    bail!("Claude /usage timed out");
                 }
-                let chunk = &buf[..n];
-                // ConPTY asks for the cursor position at start-up and waits for the answer
-                if chunk.windows(4).any(|w| w == b"\x1b[6n") {
-                    let _ = w2.lock().unwrap().write_all(b"\x1b[1;1R");
-                }
-                p2.lock().unwrap().process(chunk);
             }
-        });
-        let send = |bytes: &[u8]| -> Result<()> { Ok(writer.lock().unwrap().write_all(bytes)?) };
-        let text = || parser.lock().unwrap().screen().contents();
-        let result = (|| -> Result<Usage> {
-            let wait_for = |pred: &dyn Fn(&str) -> bool, secs: u64| -> bool {
-                let end = Instant::now() + Duration::from_secs(secs);
-                while Instant::now() < end {
-                    if pred(&text()) {
-                        return true;
-                    }
-                    std::thread::sleep(Duration::from_millis(250));
-                }
-                false
-            };
-            // Input prompt: "❯" (fullscreen renderer) or "> " (inline renderer, admin consoles).
-            // A full-width rule above it is not followed by a newline in the screen text, so the
-            // prompt may come right after "─".
-            let prompt = Regex::new(r"(?m)(?:^|─)\s*(?:❯|>)\s").unwrap();
-            let trust = |s: &str| s.to_lowercase().contains("trust this folder");
-            // login screen, "Not logged in · Please run /login", or a header of
-            // "Opus · API Usage Billing" (the plan login was lost)
-            let signed_out = |s: &str| {
-                let s = s.to_lowercase();
-                ["api usage billing", "login method", "run /login", "not logged in"].iter().any(|k| s.contains(k))
-            };
-            if !wait_for(&|s| trust(s) || prompt.is_match(s) || signed_out(s), 20) {
-                bail!("Claude Code did not start");
-            }
-            if signed_out(&text()) {
+        };
+        let remaining = || deadline.saturating_duration_since(Instant::now());
+        let stdout = stdout.recv_timeout(remaining()).context("read Claude /usage stdout")??;
+        let stderr = stderr.recv_timeout(remaining()).context("read Claude /usage stderr")??;
+        let signed_out = |bytes: &[u8]| {
+            let text = String::from_utf8_lossy(bytes).to_ascii_lowercase();
+            ["api usage billing", "login method", "run /login", "not logged in"]
+                .iter().any(|marker| text.contains(marker))
+        };
+        let mut usage = parse_usage_screen(&String::from_utf8_lossy(&stdout), chrono::Utc::now());
+        if !status.success() || (usage.session.is_none() && usage.weekly.is_none() && usage.weekly_extra.is_none()) {
+            if signed_out(&stdout) || signed_out(&stderr) {
                 return Err(SignedOut.into());
             }
-            if trust(&text()) {
-                send(b"\x1b[B")?; // "Yes, I trust this folder"
-                std::thread::sleep(Duration::from_millis(400));
-                send(b"\r")?;
-                if !wait_for(&|s| !trust(s), 15) {
-                    bail!("trust prompt did not close");
-                }
-                std::thread::sleep(Duration::from_millis(1500));
-            }
-            send(b"/usage")?;
-            std::thread::sleep(Duration::from_millis(800));
-            send(b"\r")?;
-            let done = |s: &str| s.contains("Current week") && s.matches("% used").count() >= 2 && s.matches("Resets").count() >= 2;
-            if !wait_for(&|s| done(s) || signed_out(s), timeout.as_secs()) || !done(&text()) {
-                if signed_out(&text()) {
-                    return Err(SignedOut.into());
-                }
-                bail!("no plan usage on /usage screen");
-            }
-            std::thread::sleep(Duration::from_millis(500)); // let the last line render
-            let mut u = parse_usage_screen(&text(), chrono::Utc::now());
-            if u.session.is_none() && u.weekly.is_none() {
-                bail!("could not parse /usage screen");
-            }
-            u.plan = claude_plan();
-            Ok(u)
-        })();
-        if result.is_err() {
-            let path = local_appdata().join(r"TurzxDashboard\claude_cli_debug.txt");
-            let _ = std::fs::write(path, text());
+            bail!("Claude /usage returned no subscription limits ({status})");
         }
-        let _ = send(b"\x1b");
-        let _ = child.kill();
-        result
+        usage.plan = claude_plan();
+        Ok(usage)
     }
 }
-
-// --- Codex ----------------------------------------------------------------------
 
 pub fn codex() -> Result<Usage> {
     let auth: Value = serde_json::from_slice(&std::fs::read(home().join(r".codex\auth.json"))?)?;
@@ -776,6 +741,37 @@ mod tests {
         assert!(Antigravity::from_cli(&gone, &mut v));
         assert_eq!((v.weekly_extra, v.session, v.weekly), (None, u.session, u.weekly));
         assert!(!Antigravity::from_cli(&json!("error"), &mut Usage::default()));
+    }
+
+    #[test]
+    fn parses_optional_fable_without_borrowing_another_limit() {
+        let now = chrono::Utc::now();
+        let base = "Current session: 12% used\nCurrent week (all models): 25% used\n";
+        assert_eq!(parse_usage_screen(base, now).weekly_extra, None);
+
+        let with_fable = format!("{base}Current week (Fable): 0% used\n");
+        let usage = parse_usage_screen(&with_fable, now);
+        assert_eq!(usage.session, Some(12.0));
+        assert_eq!(usage.weekly, Some(25.0));
+        assert_eq!(usage.weekly_extra, Some(0.0));
+
+        let missing_value = format!(
+            "{base}Current week (Fable)\nCurrent week (Sonnet only): 73% used\n"
+        );
+        assert_eq!(parse_usage_screen(&missing_value, now).weekly_extra, None);
+        let fable_only = parse_usage_screen("Current week (Fable)\n  72% used", now);
+        assert_eq!(fable_only.weekly, None);
+        assert_eq!(fable_only.weekly_extra, Some(72.0));
+    }
+
+    #[test]
+    fn parses_claude_print_usage() {
+        let text = "Current session: 52% used \u{b7} resets Nov 16, 12:49am (Asia/Seoul)\nCurrent week (all models): 89% used \u{b7} resets Nov 18, 12:59am (Asia/Seoul)\nCurrent week (Fable): 100% used \u{b7} resets Nov 18, 12:59am (Asia/Seoul)";
+        let usage = parse_usage_screen(text, chrono::Utc::now());
+        assert_eq!(usage.session, Some(52.0));
+        assert_eq!(usage.weekly, Some(89.0));
+        assert_eq!(usage.weekly_extra, Some(100.0));
+        assert!(usage.session_reset.is_some() && usage.weekly_reset.is_some());
     }
 
     #[test]

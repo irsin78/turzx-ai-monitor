@@ -2,7 +2,7 @@
 
 use super::*;
 
-pub(super) const CLOCK_BASELINE: f32 = 172.0;
+pub(super) const CLOCK_BASELINE: f32 = 166.0;
 pub(super) const DATE_Y: f32 = 206.0;
 
 pub(super) fn draw_clock(cv: &mut Canvas, now: &DateTime<Local>, x: f32, right: f32) {
@@ -11,18 +11,19 @@ pub(super) fn draw_clock(cv: &mut Canvas, now: &DateTime<Local>, x: f32, right: 
     let h = if h24 { now.hour() } else if now.hour() % 12 == 0 { 12 } else { now.hour() % 12 };
     let hm = format!("{}:{:02}", h, now.minute());
     let ampm = if h24 { "" } else if now.hour() < 12 { "AM" } else { "PM" };
-    let sec_font = num(34.0, Face::NumLight);
-    let mut f = num(170.0, Face::NumLight);
-    for size in (120..=170).rev().step_by(5) {
+    let sec_font = num(24.0, Face::NumLight);
+    let suffix_w = cv.text_len("00", sec_font).max(cv.caps_len(ampm, 20.0, 2.5));
+    let mut f = num(150.0, Face::NumLight);
+    for size in (55..=150).rev().step_by(5) {
         // 1-9 o'clock can be larger than 10-12
         f = num(size as f32, Face::NumLight);
-        if x + cv.text_len(&hm, f) + 16.0 + cv.text_len("00", sec_font) <= right {
+        if x + cv.text_len(&hm, f) + 12.0 + suffix_w <= right {
             break;
         }
     }
     cv.text_at(x - 4.0, CLOCK_BASELINE, &hm, f, INK, Anchor::Ls);
     let digits_top = CLOCK_BASELINE + cv.ink_top("0", f);
-    let sx = x + cv.text_len(&hm, f) + 16.0;
+    let sx = x + cv.text_len(&hm, f) + 12.0;
     cv.caps(sx, digits_top + 4.0, ampm, 20.0, Some(ACCENT), 2.5, false);
     cv.text(sx, digits_top + 30.0, &format!("{:02}", now.second()), sec_font, mix(ACCENT, BG, 0.7));
     let date = now.format_localized(t.date, t.locale).to_string();
@@ -59,12 +60,13 @@ pub(super) fn draw_calendar(cv: &mut Canvas, now: &DateTime<Local>, x: f32, y: f
     for day in 1..=days {
         let cell = lead + day - 1;
         let (r, i) = (cell / 7, cell % 7);
-        let cy = y + 70.0 + r as f32 * 27.0;
+        let cy = y + 70.0 + r as f32 * if w <= 210.0 { 21.0 } else { 27.0 };
         let cx = x + cw * i as f32 + cw / 2.0;
         let red = i == 0 || holidays & (1 << day) != 0;
         let mut color = if red { SUNDAY } else if i == 6 { SATURDAY } else { INK };
         if day as u32 == now.day() {
-            cv.rect(cx - 15.0, cy - 13.0, cx + 15.0, cy + 13.0, ACCENT);
+            let half = (cw / 2.0 - 1.0).min(15.0);
+            cv.rect(cx - half, cy - 11.0, cx + half, cy + 11.0, ACCENT);
             color = BG;
         }
         cv.text_at(cx, cy, &day.to_string(), f_day, color, Anchor::Mm);

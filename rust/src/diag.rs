@@ -39,7 +39,7 @@ pub fn fake_state() -> state::State {
         coupons: 0,
         weekly_extra: None,
     };
-    st.ai.insert("Claude", u(12.0, 8000.0, 45.0, 300000.0, serde_json::json!({"rateLimitTier": "default_claude_max_20x"})));
+    st.ai.insert("Claude", ai::Usage { weekly_extra: Some(72.0), ..u(12.0, 8000.0, 45.0, 300000.0, serde_json::json!({"rateLimitTier": "default_claude_max_20x"})) });
     st.ai.insert("Codex", ai::Usage { coupons: 3, ..u(3.0, 17000.0, 37.0, 270000.0, serde_json::json!({"plan_type": "pro"})) });
     st.ai.insert("Antigravity", ai::Usage { weekly_extra: Some(10.0), ..u(92.0, 3000.0, 1.0, 560000.0, serde_json::json!({"currentTier": "free-tier", "paidTier": "g1-pro-tier", "paidTierName": "Google AI Pro"})) });
     st.hw = hw::Hardware {
@@ -404,11 +404,6 @@ pub fn run(cmd: &str) -> Result<()> {
             let mut m = mascot::Mascots::new(&areas);
             m.update(0.5, &areas);
             m.draw(cv.pixmap_mut(), &areas);
-            for (head, b) in m.heads(&areas).into_iter().zip(&ui::agent_bubbles(&st)) {
-                if let Some(b) = b {
-                    ui::draw_agent_bubble(&mut cv, head, b, 1300.0, 1520.0);
-                }
-            }
             cv.save_png("preview_agent.png")?;
             println!("saved preview_agent.png");
         }

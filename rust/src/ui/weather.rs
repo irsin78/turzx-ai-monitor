@@ -28,7 +28,7 @@ pub(super) fn draw_air(cv: &mut Canvas, w: &Weather, x: f32, y: f32, right: f32)
         .map(|(label, pm, aqi, fine)| (label, pm.map(|v| format!("{v:.0}")), grade(pm, aqi, fine)))
         .collect();
     // with grade words while they fit, then just the numbers colored by grade
-    let tries = [18.0, 17.0, 16.0, 15.0, 14.0, 13.0].map(|z| (z, true)).into_iter().chain([18.0, 16.0, 14.0].map(|z| (z, false)));
+    let tries = [19.0, 18.0, 17.0, 16.0, 15.0, 14.0].map(|z| (z, true)).into_iter().chain([18.0, 16.0, 14.0].map(|z| (z, false)));
     for (size, words) in tries {
         let (f_lab, f_val, f_grade) = (ko(size, false), num(size + 4.0, Face::Num), ko(size, true));
         let (gap, sep) = (size * 0.3, size * 1.0);
@@ -45,7 +45,7 @@ pub(super) fn draw_air(cv: &mut Canvas, w: &Weather, x: f32, y: f32, right: f32)
         }
         let mut cx = x;
         for (label, v, g) in &items {
-            cv.text(cx, y, label, f_lab, MUTED);
+            cv.text(cx, y, label, f_lab, SOFT);
             cx += cv.text_len(label, f_lab) + gap;
             let v = v.as_deref().unwrap_or("--");
             let vc = match g {
@@ -105,7 +105,7 @@ pub(super) fn draw_sun(cv: &mut Canvas, w: &Weather, min_x: f32, y: f32, right: 
     }
 }
 
-pub(super) const TOMORROW_W: f32 = 122.0; // tomorrow block, from its left edge to the column's right edge
+pub(super) const TOMORROW_W: f32 = 145.0; // tomorrow block, from its left edge to the column's right edge
 pub(super) const TOMORROW_ICON_R: f32 = 20.0; // half the width of the small weather icon
 
 pub(super) fn draw_weather(cv: &mut Canvas, st: &State, x: f32, y: f32, right: f32) {
@@ -115,22 +115,22 @@ pub(super) fn draw_weather(cv: &mut Canvas, st: &State, x: f32, y: f32, right: f
         return;
     };
     let dg = |c: f64| format!("{:.0}°", deg(c));
-    weather_icon(cv, x + 44.0, y + 58.0, wx::icon(w.code, w.night), 0.95);
-    let big = num(78.0, Face::NumLight);
+    weather_icon(cv, x + 39.0, y + 58.0, wx::icon(w.code, w.night), 0.83);
+    let big = num(69.0, Face::NumLight);
     let t = dg(w.temp);
-    cv.text(x + 108.0, y + 14.0, &t, big, INK);
-    let tx = x + 108.0 + cv.text_len(&t, big) + 22.0;
+    cv.text(x + 96.0, y + 14.0, &t, big, INK);
+    let tx = x + 96.0 + cv.text_len(&t, big) + 22.0;
     let limit = right - TOMORROW_W - 36.0 - tx; // room left of the tomorrow block
     let label = s.weather_label(w.code);
-    cv.text(tx, y + 26.0, label, fit_ko(cv, label, &[26.0, 24.0, 22.0, 20.0, 18.0, 16.0], true, limit), INK);
+    cv.text(tx, y + 26.0, label, fit_ko(cv, label, &[28.0, 26.0, 24.0, 22.0, 20.0, 18.0], true, limit), INK);
     let line = format!("{}  ·  {}", fill(s.feels, dg(w.feels)), fill(s.humidity, w.humidity));
-    cv.text(tx, y + 64.0, &line, fit_ko(cv, &line, &[20.0, 19.0, 18.0, 17.0, 16.0, 15.0, 14.0], false, limit), MUTED);
-    draw_air(cv, w, tx, y + 92.0, right - TOMORROW_W - 36.0);
+    cv.text(tx, y + 63.0, &line, fit_ko(cv, &line, &[18.0, 17.0, 16.0], false, limit), SOFT);
+    draw_air(cv, w, tx, y + 91.0, right - TOMORROW_W - 36.0);
     let rain = w.rain_prob.map(|p| format!("  ·  {}", fill(s.rain, p))).unwrap_or_default();
     let minmax = format!("{}  ·  {}{rain}", fill(s.low, dg(w.t_min)), fill(s.high, dg(w.t_max)));
-    let f_mm = fit_ko(cv, &minmax, &[20.0, 19.0, 18.0, 17.0, 16.0], false, right - TOMORROW_W - 40.0 - x);
+    let f_mm = fit_ko(cv, &minmax, &[19.0, 18.0, 17.0], false, right - TOMORROW_W - 40.0 - x);
     cv.text(x, y + 124.0, &minmax, f_mm, MUTED);
-    draw_sun(cv, w, x + cv.text_len(&minmax, f_mm) + 16.0, y + 124.0, right - TOMORROW_W - 40.0);
+    draw_sun(cv, w, x, y + 150.0, right - TOMORROW_W - 40.0);
 
     if let Some(t) = &w.tomorrow {
         let tx = right - TOMORROW_W;
@@ -144,9 +144,17 @@ pub(super) fn draw_weather(cv: &mut Canvas, st: &State, x: f32, y: f32, right: f
         weather_icon(cv, tx + TOMORROW_ICON_R - 5.0, y + 58.0, wx::icon(t.code, false), 0.5);
         let (lx, label) = (tx + TOMORROW_ICON_R * 2.0 + 5.0, s.weather_label(t.code));
         cv.text(lx, y + 44.0, label, fit_ko(cv, label, &[18.0, 17.0, 16.0, 15.0, 14.0, 13.0], false, RULES_X[0] - 12.0 - lx), INK);
-        cv.text(tx, y + 96.0, &format!("{} / {}", dg(t.t_min), dg(t.t_max)), num(26.0, Face::Num), INK);
+        for (i, (template, temp)) in [(s.low, t.t_min), (s.high, t.t_max)].into_iter().enumerate() {
+            let x = tx + i as f32 * TOMORROW_W / 2.0;
+            let label = fill(template, "").trim().to_owned();
+            let font = fit_ko(cv, &label, &[15.0, 14.0, 13.0, 12.0], false, TOMORROW_W / 2.0 - 6.0);
+            cv.text(x, y + 96.0, &label, font, SOFT);
+            cv.text(x, y + 113.0, &dg(temp), num(26.0, Face::Num), INK);
+        }
         if let Some(p) = t.rain_prob {
-            cv.text(tx, y + 128.0, &fill(s.rain, p), ko(17.0, false), MUTED);
+            let rain = fill(s.rain, p);
+            let font = fit_ko(cv, &rain, &[19.0, 18.0, 17.0, 16.0], true, TOMORROW_W);
+            cv.text(right - cv.text_len(&rain, font), y + 151.0, &rain, font, SOFT);
         }
     }
 }

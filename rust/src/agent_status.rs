@@ -20,7 +20,7 @@ impl Source { pub fn index(self) -> usize { match self { Self::Claude => 0, Self
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Status { Clear, Done, Waiting }
+pub enum Status { Clear, Done, Waiting, Active }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -78,14 +78,23 @@ pub fn parse(source: Source, input: &str) -> Option<Event> {
                 // wrap_up returns as soon as its box is up: that is not an answer
                 "PostToolUse" if is_wrap_up(&v) => return None,
                 // PostToolUse: a tool ran, so an answered prompt or question is no longer waiting
-                "UserPromptSubmit" | "SessionEnd" | "PostToolUse" => Status::Clear,
+                "UserPromptSubmit" | "PostToolUse" => Status::Active,
+                "SessionEnd" => Status::Clear,
                 _ => return None,
             };
             (v["session_id"].as_str()?, status)
         }
         Source::Codex => {
-            if v["type"] != "agent-turn-complete" { return None; }
-            (v["thread-id"].as_str()?, Status::Done)
+            if v["type"] == "agent-turn-complete" {
+                (v["thread-id"].as_str()?, Status::Done)
+            } else {
+                let status = match v["hook_event_name"].as_str()? {
+                    "UserPromptSubmit" => Status::Active,
+                    "Stop" => Status::Done,
+                    _ => return None,
+                };
+                (v["session_id"].as_str()?, status)
+            }
         }
         // agy has no hook for a permission prompt: only done. PreInvocation comes before every
         // model call, so the next prompt (or a resumed turn) clears it.
@@ -94,7 +103,7 @@ pub fn parse(source: Source, input: &str) -> Option<Event> {
                 if v["fullyIdle"] != true { return None; } // a subagent, or more to come
                 if v["terminationReason"] == "USER_CANCELED" { Status::Clear } else { Status::Done }
             } else if v["invocationNum"].is_number() {
-                Status::Clear
+                Status::Active
             } else {
                 return None;
             };
@@ -115,13 +124,14 @@ pub fn parse(source: Source, input: &str) -> Option<Event> {
 #[derive(Clone)]
 struct Session { event: Event, at: Instant, sequence: u64 }
 #[derive(Clone, Default)]
-pub struct Sessions { entries: HashMap<(Source, String), Session>, pub revision: [u64; 3] }
+pub struct Sessions { entries: HashMap<(Source, String), Session>, pub revision: [u64; 3], completed: [Option<Instant>; 3] }
 pub struct Summary<'a> { pub status: Status, pub project: &'a str, pub more: usize }
 impl Sessions {
     pub fn apply(&mut self, event: Event, now: Instant) {
         self.expire(now);
         let key = (event.source, event.session.clone());
         if event.event == Status::Clear { self.entries.remove(&key); return; }
+        if event.event == Status::Done { self.completed[event.source.index()] = Some(now); }
         // a turn that ends on a question (or a pending prompt) is still waiting: Stop's done must
         // not hide it; only an answer (Clear) or expiry ends it
         if event.event == Status::Done && self.entries.get(&key).is_some_and(|s| s.event.event == Status::Waiting) { return; }
@@ -139,6 +149,7 @@ impl Sessions {
     fn lifetime(e: &Event) -> Duration {
         Duration::from_secs(match (e.event, e.source) {
             (Status::Waiting, _) => 1800,
+            (Status::Active, _) => 300,
             (_, Source::Claude) => 10,
             (_, Source::Codex | Source::Antigravity) => 180,
         })
@@ -147,8 +158,15 @@ impl Sessions {
         now.saturating_duration_since(s.at) < Self::lifetime(&s.event)
     }
     fn expire(&mut self, now: Instant) { self.entries.retain(|_, s| Self::alive(s, now)); }
+    pub fn quota_activity(&self, source: Source, now: Instant) -> (bool, Option<Instant>) {
+        let completed = self.completed[source.index()];
+        let active = self.entries.values().any(|s| {
+            s.event.source == source && s.event.event == Status::Active && Self::alive(s, now)
+        });
+        (active, completed)
+    }
     pub fn summary(&self, source: Source, now: Instant) -> Option<Summary<'_>> {
-        let mut all: Vec<_> = self.entries.values().filter(|s| s.event.source == source && Self::alive(s, now)).collect();
+        let mut all: Vec<_> = self.entries.values().filter(|s| s.event.source == source && s.event.event != Status::Active && Self::alive(s, now)).collect();
         all.sort_by_key(|s| (s.event.event, s.sequence));
         let s = all.last()?;
         Some(Summary { status: s.event.event, project: &s.event.project, more: all.len() - 1 })
@@ -190,15 +208,15 @@ pub fn command(args: &[String]) {
     }) else { return; };
     let option = |key| args.iter().position(|s| s == key).and_then(|i| args.get(i + 1));
     let port = option("--port").and_then(|s| s.parse().ok()).filter(|&p| p != 0).unwrap_or(DEFAULT_PORT);
-    let input = match source {
-        Source::Claude | Source::Antigravity => {
+    let input = match (source, args.iter().any(|a| a == "--hook-stdin")) {
+        (Source::Claude | Source::Antigravity, _) | (Source::Codex, true) => {
             let mut input = String::new();
             if std::io::stdin().take(1024 * 1024).read_to_string(&mut input).is_err() { return; }
             // agy reads a JSON result from every hook: an empty one changes nothing
             if source == Source::Antigravity { println!("{{}}"); }
             input
         }
-        Source::Codex => {
+        (Source::Codex, false) => {
             let Some(input) = args.last() else { return; };
             if let Some(raw) = option("--previous-notify") { forward_notify(raw, input); }
             input.clone()
@@ -265,7 +283,7 @@ mod tests {
     use super::*;
     #[test]
     fn hook_events_and_private_data() {
-        for (hook, status) in [("Notification", Status::Waiting), ("Stop", Status::Done), ("UserPromptSubmit", Status::Clear), ("SessionEnd", Status::Clear), ("PostToolUse", Status::Clear)] {
+        for (hook, status) in [("Notification", Status::Waiting), ("Stop", Status::Done), ("UserPromptSubmit", Status::Active), ("SessionEnd", Status::Clear), ("PostToolUse", Status::Active)] {
             let input = serde_json::json!({"hook_event_name":hook,"session_id":"abc","cwd":"C:\\Projects\\turzx35\\","message":"Claude needs your permission to use Bash", "transcript_path":"secret"});
             let event = parse(Source::Claude, &input.to_string()).unwrap();
             assert_eq!(event.event, status); assert_eq!(event.project, "turzx35");
@@ -307,7 +325,7 @@ mod tests {
         assert_eq!(claude(&hook("PreToolUse", "mcp__ccd_turn__wrap_up", r#"{"recap":"r"}"#)), None);
         assert_eq!(claude(&hook("PreToolUse", "Bash", "{}")), None);
         assert_eq!(claude(&hook("PostToolUse", "mcp__ccd_turn__wrap_up", "{}")), None);
-        assert_eq!(claude(&hook("PostToolUse", "AskUserQuestion", "{}")), Some(Status::Clear));
+        assert_eq!(claude(&hook("PostToolUse", "AskUserQuestion", "{}")), Some(Status::Active));
         assert_eq!(claude(r#"{"hook_event_name":"PermissionRequest","session_id":"s","tool_name":"Bash"}"#), Some(Status::Waiting));
         // Stop after a question keeps it waiting; the next prompt clears it
         let now = Instant::now(); let mut s = Sessions::default();
@@ -328,7 +346,7 @@ mod tests {
         assert!(!bytes.contains("private") && !bytes.contains("secret"));
         assert!(agy(r#""terminationReason":"NO_TOOL_CALL","fullyIdle":false"#).is_none());
         assert_eq!(agy(r#""terminationReason":"USER_CANCELED","fullyIdle":true"#).unwrap().event, Status::Clear);
-        assert_eq!(agy(r#""invocationNum":0,"initialNumSteps":1"#).unwrap().event, Status::Clear);
+        assert_eq!(agy(r#""invocationNum":0,"initialNumSteps":1"#).unwrap().event, Status::Active);
         assert!(agy(r#""toolCall":{"name":"run_command"},"stepIdx":2"#).is_none());
         assert!(Event::decode(br#"{"source":"antigravity","event":"waiting","session":"s","project":"p"}"#).is_none());
     }
@@ -372,5 +390,26 @@ mod tests {
         let event = Event { source: Source::Codex, event: Status::Done, session: "s".into(), project: "p".into() };
         sender.send_to(&event.encode().unwrap(), target).unwrap();
         assert_eq!(receive(&receiver, &mut buf).unwrap(), Some(event));
+    }
+}
+
+#[cfg(test)]
+mod quota_tests {
+    use super::*;
+
+    #[test]
+    fn quota_activity_tracks_active_sessions_without_status_bubbles() {
+        let now = Instant::now();
+        let mut sessions = Sessions::default();
+        let event = |source, event| Event { source, event, session: "session".into(), project: String::new() };
+        sessions.apply(event(Source::Claude, Status::Active), now);
+        assert!(sessions.summary(Source::Claude, now).is_none());
+        assert_eq!(sessions.quota_activity(Source::Claude, now), (true, None));
+        let done = now + Duration::from_secs(10);
+        sessions.apply(event(Source::Claude, Status::Done), done);
+        assert_eq!(sessions.quota_activity(Source::Claude, done), (false, Some(done)));
+        sessions.apply(event(Source::Codex, Status::Done), done);
+        assert_eq!(sessions.quota_activity(Source::Codex, done), (false, Some(done)));
+        assert_eq!(sessions.quota_activity(Source::Codex, done + Duration::from_secs(90)), (false, Some(done)));
     }
 }
