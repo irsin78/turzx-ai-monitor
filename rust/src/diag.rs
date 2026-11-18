@@ -9,7 +9,7 @@ use crate::sensors::{self as hw};
 use crate::sources::{ai, weather};
 use crate::{mascot, state, ui};
 
-pub const COMMANDS: &str = "usb | sensors | weather | api-cost | claude-cli | layout | offline-preview | standby | mascots | jpeg-check | profile | fps-test | test-pattern | sd | sd-put | sd-play | sd-stop | sd-ls | sd-show | boot | encode-test | offline | sd-rm | decode-test | agent-status | agy-raw";
+pub const COMMANDS: &str = "usb | sensors | weather | weather-met | api-cost | claude-cli | layout | offline-preview | standby | mascots | jpeg-check | profile | fps-test | test-pattern | sd | sd-put | sd-play | sd-stop | sd-ls | sd-show | boot | encode-test | offline | sd-rm | decode-test | agent-status | agy-raw";
 
 /// Four vertical quarter bands (red, green, blue, white).
 fn test_bands() -> Vec<u8> {
@@ -96,6 +96,10 @@ pub fn run(cmd: &str) -> Result<()> {
         "weather" => {
             println!("{:#?}", weather::fetch()?);
     
+        }
+        "weather-met" => {
+            println!("MET Norway forecast and sunrise/sunset (air quality not included; weather cache not written)");
+            println!("{:#?}", weather::fetch_met_only()?);
         }
         "api-cost" => {
             // takes the waiting budget notifications off the subscription (as the dashboard does)

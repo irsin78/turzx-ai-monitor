@@ -124,7 +124,7 @@ Antigravity 아래에 "Gemini API ₩1,234"로 표시합니다. 금액은 결제
 
 ## 데이터 출처
 
-- 날씨·미세먼지: [Open-Meteo](https://open-meteo.com) (키 불필요). 미세먼지는 측정소 값이 아니라 CAMS 모델 값입니다.
+- 날씨·미세먼지: [Open-Meteo](https://open-meteo.com) (키 불필요), 예보 보조 소스는 [MET Norway](https://api.met.no). 미세먼지는 측정소 값이 아니라 CAMS 모델 값입니다.
 - 공휴일: 한국은 내장 표, 다른 나라는 [Nager.Date](https://date.nager.at)
 - 영화: [TMDB](https://www.themoviedb.org) (비상업 무료 API 키, 1주일 캐시). This product uses the TMDB API but is
   not endorsed or certified by TMDB.

@@ -1,11 +1,12 @@
-//! Current weather, tomorrow's forecast and air quality from Open-Meteo (no API key), for the
-//! location in the settings (a city name is looked up once with Open-Meteo's geocoding).
+//! Current weather and tomorrow's forecast from Open-Meteo with a MET Norway fallback,
+//! plus Open-Meteo air quality (no API keys). A city is looked up once with Open-Meteo.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result};
+use chrono::{NaiveDate, TimeZone, Timelike};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -228,14 +229,50 @@ pub fn fetch() -> Result<Weather> {
     Ok(cached.weather)
 }
 
+fn forecast_agent() -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(15)))
+        .user_agent(concat!("turzx-ai-monitor/", env!("CARGO_PKG_VERSION"), " github.com/irsin78/turzx-ai-monitor"))
+        .build()
+        .into()
+}
+
+/// Diagnostic MET forecast and sunrise/sunset only; no air quality or cache writes.
+pub fn fetch_met_only() -> Result<Weather> {
+    fetch_met(&forecast_agent(), coords()?)
+}
+
 fn fetch_current() -> Result<Weather> {
-    let (lat, lon) = coords()?;
+    let coords = coords()?;
+    let agent = forecast_agent();
+    let mut weather = forecast_with_fallback(|| fetch_open_meteo(&agent, coords), || fetch_met(&agent, coords))?;
+    let [pm25, pm10, aqi25, aqi10] = fetch_air(coords).map_err(|e| log::warn!("air quality failed: {e:#}")).unwrap_or([None; 4]);
+    weather.pm25 = pm25;
+    weather.pm10 = pm10;
+    weather.aqi25 = aqi25;
+    weather.aqi10 = aqi10;
+    Ok(weather)
+}
+
+/// Only a failed primary forecast triggers MET; air quality remains independent.
+fn forecast_with_fallback(primary: impl FnOnce() -> Result<Weather>, backup: impl FnOnce() -> Result<Weather>) -> Result<Weather> {
+    match primary() {
+        Ok(weather) => Ok(weather),
+        Err(primary_error) => {
+            let weather = backup().map_err(|e| anyhow::anyhow!("Open-Meteo: {primary_error:#}; MET Norway: {e:#}"))?;
+            log::info!("weather from MET Norway (Open-Meteo: {primary_error:#})");
+            Ok(weather)
+        }
+    }
+}
+
+fn fetch_open_meteo(agent: &ureq::Agent, (lat, lon): (f64, f64)) -> Result<Weather> {
     let url = format!(
         "https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&timezone=auto&forecast_days=2\
          &current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,is_day\
          &daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset"
     );
-    let j: Value = ureq::get(&url).call()?.body_mut().read_json()?;
+    let j: Value = agent.get(&url).call()?.body_mut().read_json()?;
     let c = &j["current"];
     let d = &j["daily"];
     let f = |v: &Value| v.as_f64().context("missing number");
@@ -247,7 +284,6 @@ fn fetch_current() -> Result<Weather> {
         t_max: d["temperature_2m_max"][1].as_f64().unwrap_or(f64::NAN),
         rain_prob: d["precipitation_probability_max"][1].as_i64(),
     });
-    let [pm25, pm10, aqi25, aqi10] = fetch_air((lat, lon)).map_err(|e| log::warn!("air quality failed: {e:#}")).unwrap_or([None; 4]);
     Ok(Weather {
         temp: f(&c["temperature_2m"])?,
         feels: f(&c["apparent_temperature"])?,
@@ -260,11 +296,148 @@ fn fetch_current() -> Result<Weather> {
         tomorrow,
         sunrise: sun("sunrise"),
         sunset: sun("sunset"),
-        pm25,
-        pm10,
-        aqi25,
-        aqi10,
+        pm25: None,
+        pm10: None,
+        aqi25: None,
+        aqi10: None,
     })
+}
+
+fn fetch_met(agent: &ureq::Agent, (lat, lon): (f64, f64)) -> Result<Weather> {
+    let now = chrono::Local::now();
+    let url = format!("https://api.met.no/weatherapi/locationforecast/2.0/complete?lat={lat:.4}&lon={lon:.4}");
+    let j: Value = agent.get(&url).call()?.body_mut().read_json()?;
+    let mut weather = parse_met(&j, now.date_naive(), &chrono::Local)?;
+    let url = format!(
+        "https://api.met.no/weatherapi/sunrise/3.0/sun?lat={lat:.4}&lon={lon:.4}&date={}&offset={}",
+        now.date_naive(), urlencode(&now.format("%:z").to_string())
+    );
+    match agent.get(&url).call().and_then(|mut r| r.body_mut().read_json::<Value>()) {
+        Ok(sun) => set_met_sun(&mut weather, &sun, &chrono::Local),
+        Err(e) => log::debug!("MET Norway sunrise/sunset failed: {e}"),
+    }
+    Ok(weather)
+}
+
+fn met_symbol(data: &Value) -> Option<&str> {
+    data["next_1_hours"]["summary"]["symbol_code"].as_str()
+        .or_else(|| data["next_6_hours"]["summary"]["symbol_code"].as_str())
+}
+
+/// MET's day/night suffix affects the icon, not the WMO condition code.
+fn met_code(symbol: &str) -> i64 {
+    let base = ["_day", "_night", "_polartwilight"].iter().find_map(|suffix| symbol.strip_suffix(suffix)).unwrap_or(symbol);
+    if base.contains("thunder") {
+        return 95;
+    }
+    match base {
+        "clearsky" => 0,
+        "fair" => 1,
+        "partlycloudy" => 2,
+        "cloudy" => 3,
+        "fog" => 45,
+        "lightrain" => 61,
+        "rain" => 63,
+        "heavyrain" => 65,
+        "lightrainshowers" => 80,
+        "rainshowers" => 81,
+        "heavyrainshowers" => 82,
+        "lightsleet" | "lightsleetshowers" => 66,
+        "sleet" | "heavysleet" | "sleetshowers" | "heavysleetshowers" => 67,
+        "lightsnow" => 71,
+        "snow" => 73,
+        "heavysnow" => 75,
+        "lightsnowshowers" | "snowshowers" => 85,
+        "heavysnowshowers" => 86,
+        _ => {
+            log::debug!("unknown MET Norway symbol: {symbol}");
+            3
+        }
+    }
+}
+
+/// Remaining hourly values and six-hour extrema are assigned to their local start date.
+/// A six-hour interval can cross midnight; its full extrema still count for that start date.
+fn met_day<T: TimeZone>(series: &[Value], date: NaiveDate, zone: &T) -> Option<Forecast> {
+    let mut t_min = f64::INFINITY;
+    let mut t_max = f64::NEG_INFINITY;
+    let mut rain_prob = None;
+    let mut codes = Vec::<(i64, usize)>::new();
+    let mut noon = None;
+    for entry in series {
+        let time = chrono::DateTime::parse_from_rfc3339(entry["time"].as_str()?).ok()?.with_timezone(zone);
+        if time.date_naive() != date {
+            continue;
+        }
+        let data = &entry["data"];
+        for temp in [
+            data["instant"]["details"]["air_temperature"].as_f64(),
+            data["next_6_hours"]["details"]["air_temperature_min"].as_f64(),
+            data["next_6_hours"]["details"]["air_temperature_max"].as_f64(),
+        ].into_iter().flatten() {
+            t_min = t_min.min(temp);
+            t_max = t_max.max(temp);
+        }
+        for period in ["next_1_hours", "next_6_hours"] {
+            if let Some(prob) = data[period]["details"]["probability_of_precipitation"].as_f64() {
+                let prob = prob.round() as i64;
+                rain_prob = Some(rain_prob.map_or(prob, |previous: i64| previous.max(prob)));
+            }
+        }
+        if let Some(symbol) = met_symbol(data) {
+            let code = met_code(symbol);
+            if let Some((_, count)) = codes.iter_mut().find(|(c, _)| *c == code) {
+                *count += 1;
+            } else {
+                codes.push((code, 1));
+            }
+            // Prefer the symbol nearest noon within 11:00..=13:00, otherwise the mode.
+            let distance = (i64::from(time.num_seconds_from_midnight()) - 12 * 3600).abs();
+            if distance <= 3600 && noon.is_none_or(|(best, _)| distance < best) {
+                noon = Some((distance, code));
+            }
+        }
+    }
+    (t_min.is_finite() && t_max.is_finite()).then(|| Forecast {
+        code: noon.map(|(_, code)| code).or_else(|| codes.iter().max_by_key(|(_, count)| *count).map(|(code, _)| *code)).unwrap_or(3),
+        t_min, t_max, rain_prob,
+    })
+}
+
+/// The timezone is explicit so fixtures do not depend on the test machine's location.
+fn parse_met<T: TimeZone>(j: &Value, today: NaiveDate, zone: &T) -> Result<Weather> {
+    let series = j["properties"]["timeseries"].as_array().context("MET Norway: missing timeseries")?;
+    let data = &series.first().context("MET Norway: empty timeseries")?["data"];
+    let current = &data["instant"]["details"];
+    let temp = current["air_temperature"].as_f64().context("MET Norway: missing temperature")?;
+    let symbol = met_symbol(data).context("MET Norway: missing current symbol")?;
+    let day = met_day(series, today, zone).context("MET Norway: missing today's temperatures or invalid time")?;
+    Ok(Weather {
+        temp,
+        feels: current["apparent_air_temperature"].as_f64().unwrap_or(temp),
+        humidity: current["relative_humidity"].as_f64().context("MET Norway: missing humidity")?.round() as i64,
+        code: met_code(symbol),
+        night: symbol.ends_with("_night"),
+        t_min: day.t_min,
+        t_max: day.t_max,
+        rain_prob: day.rain_prob,
+        tomorrow: today.succ_opt().and_then(|date| met_day(series, date, zone)),
+        sunrise: None,
+        sunset: None,
+        pm25: None,
+        pm10: None,
+        aqi25: None,
+        aqi10: None,
+    })
+}
+
+fn set_met_sun<T: TimeZone>(weather: &mut Weather, j: &Value, zone: &T) {
+    let sun = |key: &str| j["properties"][key]["time"].as_str()
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s)
+            .or_else(|_| chrono::DateTime::parse_from_str(s, "%Y-%m-%dT%H:%M%:z")).ok())
+        .map(|t| t.with_timezone(zone).time());
+    weather.sunrise = sun("sunrise");
+    weather.sunset = sun("sunset");
 }
 
 #[cfg(test)]
@@ -299,6 +472,135 @@ mod tests {
                 pm25: Some(12.5), pm10: Some(25.0), aqi25: Some(50.0), aqi10: None,
             },
         }
+    }
+
+    // UTC timestamps deliberately cross local midnight in Asia/Seoul.
+    const MET_FORECAST: &str = r#"{"properties":{"timeseries":[
+        {"time":"2026-11-17T15:00:00Z","data":{
+            "instant":{"details":{"air_temperature":3.5,"apparent_air_temperature":2.25,"relative_humidity":65.6}},
+            "next_1_hours":{"summary":{"symbol_code":"clearsky_night"}},
+            "next_6_hours":{"details":{"air_temperature_min":1,"air_temperature_max":6}}}},
+        {"time":"2026-11-18T03:00:00Z","data":{
+            "instant":{"details":{"air_temperature":8}},
+            "next_1_hours":{"summary":{"symbol_code":"fair_day"}},
+            "next_6_hours":{"details":{"air_temperature_min":7,"air_temperature_max":12}}}},
+        {"time":"2026-11-18T14:00:00Z","data":{
+            "instant":{"details":{"air_temperature":2}},
+            "next_1_hours":{"summary":{"symbol_code":"cloudy"}},
+            "next_6_hours":{"details":{"air_temperature_min":-2,"air_temperature_max":4}}}},
+        {"time":"2026-11-18T15:00:00Z","data":{
+            "instant":{"details":{"air_temperature":4}},
+            "next_1_hours":{"summary":{"symbol_code":"cloudy"},"details":{"probability_of_precipitation":10}},
+            "next_6_hours":{"details":{"air_temperature_min":0,"air_temperature_max":6}}}},
+        {"time":"2026-11-19T00:00:00Z","data":{
+            "instant":{"details":{"air_temperature":9}},
+            "next_1_hours":{"summary":{"symbol_code":"clearsky_day"},"details":{"probability_of_precipitation":20}}}},
+        {"time":"2026-11-19T03:00:00Z","data":{
+            "instant":{"details":{"air_temperature":15}},
+            "next_6_hours":{"summary":{"symbol_code":"heavyrainshowers_day"},
+                "details":{"air_temperature_min":11,"air_temperature_max":17,"probability_of_precipitation":80}}}},
+        {"time":"2026-11-19T06:00:00Z","data":{
+            "instant":{"details":{"air_temperature":12}},
+            "next_1_hours":{"summary":{"symbol_code":"cloudy"}},
+            "next_6_hours":{"details":{"air_temperature_min":10,"air_temperature_max":14}}}},
+        {"time":"2026-11-19T15:00:00Z","data":{
+            "instant":{"details":{"air_temperature":99}},
+            "next_1_hours":{"summary":{"symbol_code":"snow"},"details":{"probability_of_precipitation":100}}}}
+    ]}}"#;
+
+    const MET_SUN: &str = r#"{"properties":{
+        "sunrise":{"time":"2026-11-18T07:14+09:00"},
+        "sunset":{"time":"2026-11-18T17:20+09:00"}
+    }}"#;
+
+    #[test]
+    fn met_forecast_and_sun_fixtures() {
+        let j: Value = serde_json::from_str(MET_FORECAST).unwrap();
+        let today = NaiveDate::from_ymd_opt(2026, 11, 18).unwrap();
+        let zone = chrono_tz::Asia::Seoul;
+        let mut weather = parse_met(&j, today, &zone).unwrap();
+        assert_eq!((weather.temp, weather.feels, weather.humidity), (3.5, 2.25, 66));
+        assert_eq!((weather.code, weather.night), (0, true));
+        assert_eq!((weather.t_min, weather.t_max, weather.rain_prob), (-2.0, 12.0, None));
+        assert_eq!(weather.tomorrow, Some(Forecast { code: 82, t_min: 0.0, t_max: 17.0, rain_prob: Some(80) }));
+        assert_eq!((weather.pm25, weather.pm10, weather.aqi25, weather.aqi10), (None, None, None, None));
+        assert_eq!((weather.sunrise, weather.sunset), (None, None));
+
+        let sun: Value = serde_json::from_str(MET_SUN).unwrap();
+        set_met_sun(&mut weather, &sun, &zone);
+        assert_eq!(weather.sunrise, chrono::NaiveTime::from_hms_opt(7, 14, 0));
+        assert_eq!(weather.sunset, chrono::NaiveTime::from_hms_opt(17, 20, 0));
+        set_met_sun(&mut weather, &sun, &chrono::Utc);
+        assert_eq!(weather.sunrise, chrono::NaiveTime::from_hms_opt(22, 14, 0));
+        set_met_sun(&mut weather, &serde_json::json!({"properties":{"sunrise":{"time":null}}}), &zone);
+        assert_eq!((weather.sunrise, weather.sunset), (None, None));
+    }
+
+    #[test]
+    fn met_optional_values_and_modal_symbol() {
+        let mut j: Value = serde_json::from_str(MET_FORECAST).unwrap();
+        let series = j["properties"]["timeseries"].as_array_mut().unwrap();
+        let data = &mut series[0]["data"];
+        data["instant"]["details"]["apparent_air_temperature"] = Value::Null;
+        data["next_1_hours"]["summary"]["symbol_code"] = "fair_polartwilight".into();
+        data["next_1_hours"]["details"] = serde_json::json!({"probability_of_precipitation":30});
+        data["next_6_hours"]["details"]["probability_of_precipitation"] = 60.into();
+        // No noon symbol: cloudy is the most common remaining tomorrow symbol.
+        series.remove(5);
+        let today = NaiveDate::from_ymd_opt(2026, 11, 18).unwrap();
+        let weather = parse_met(&j, today, &chrono_tz::Asia::Seoul).unwrap();
+        assert_eq!(weather.feels, weather.temp);
+        assert_eq!((weather.code, weather.night, weather.rain_prob), (1, false, Some(60)));
+        assert_eq!(weather.tomorrow, Some(Forecast { code: 3, t_min: 0.0, t_max: 14.0, rain_prob: Some(20) }));
+
+        // A six-hour summary also works for the current condition.
+        let first = &mut j["properties"]["timeseries"][0]["data"];
+        first["next_1_hours"]["summary"]["symbol_code"] = Value::Null;
+        first["next_6_hours"]["summary"] = serde_json::json!({"symbol_code":"snow_night"});
+        let weather = parse_met(&j, today, &chrono_tz::Asia::Seoul).unwrap();
+        assert_eq!((weather.code, weather.night), (73, true));
+    }
+
+    #[test]
+    fn met_symbol_mapping_uses_supported_wmo_codes() {
+        for (symbol, expected) in [
+            ("clearsky_day", 0), ("fair_night", 1), ("partlycloudy_polartwilight", 2),
+            ("cloudy", 3), ("fog", 45), ("lightrain", 61), ("rain", 63), ("heavyrain", 65),
+            ("lightrainshowers_day", 80), ("rainshowers_night", 81), ("heavyrainshowers_day", 82),
+            ("lightsleet", 66), ("sleet", 67), ("heavysleetshowers_day", 67),
+            ("lightsnow", 71), ("snow", 73), ("heavysnow", 75),
+            ("lightsnowshowers_night", 85), ("snowshowers_day", 85), ("heavysnowshowers_day", 86),
+            ("rainandthunder", 95), ("lightsleetshowersandthunder_night", 95), ("unknown_day", 3),
+        ] {
+            let code = met_code(symbol);
+            assert_eq!(code, expected, "{symbol}");
+            assert!(crate::i18n::weather_index(code).is_some(), "{symbol}: {code}");
+        }
+    }
+
+    #[test]
+    fn forecast_selects_backup_only_after_primary_error() {
+        let expected = sample().weather;
+        let actual = forecast_with_fallback(|| Ok(expected.clone()), || panic!("backup must not run")).unwrap();
+        assert_eq!(actual, expected);
+        for primary_error in ["timeout", "invalid JSON", "HTTP 503"] {
+            let actual = forecast_with_fallback(|| anyhow::bail!(primary_error), || Ok(expected.clone())).unwrap();
+            assert_eq!(actual, expected);
+        }
+        let error = forecast_with_fallback(|| anyhow::bail!("primary timeout"), || anyhow::bail!("backup bad JSON")).unwrap_err().to_string();
+        assert!(error.contains("Open-Meteo: primary timeout"));
+        assert!(error.contains("MET Norway: backup bad JSON"));
+    }
+
+    #[test]
+    fn met_rejects_missing_forecast_data() {
+        let today = NaiveDate::from_ymd_opt(2026, 11, 18).unwrap();
+        for j in [serde_json::json!({}), serde_json::json!({"properties":{"timeseries":[]}})] {
+            assert!(parse_met(&j, today, &chrono::Utc).is_err());
+        }
+        let mut j: Value = serde_json::from_str(MET_FORECAST).unwrap();
+        j["properties"]["timeseries"][0]["time"] = "bad time".into();
+        assert!(parse_met(&j, today, &chrono_tz::Asia::Seoul).is_err());
     }
 
     #[test]

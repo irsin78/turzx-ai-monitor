@@ -181,7 +181,7 @@ reads 0 until the first report of that month.
 
 ## Data and services
 
-- Weather and air quality: [Open-Meteo](https://open-meteo.com) (no key; city lookup by its geocoding API).
+- Weather and air quality: [Open-Meteo](https://open-meteo.com) (no key; city lookup by its geocoding API), with [MET Norway](https://api.met.no) as the backup forecast source.
   Air quality is the CAMS model, not station measurements.
 - Holidays: built-in table for Korea, [Nager.Date](https://date.nager.at) for other countries.
 - Movies: [TMDB](https://www.themoviedb.org) (free API key for non-commercial use, cached for a
