@@ -234,8 +234,9 @@ fn fetch() {
 /// folder, or else this week's movies as stills (TMDB, needs `[offline] tmdb_key`).
 pub fn build(now: &chrono::DateTime<chrono::Local>) -> anyhow::Result<Vec<u8>> {
     fetch();
-    // today's and tomorrow's forecast under the calendar (left out if the weather is unreachable)
-    let weather = crate::sources::weather::fetch().inspect_err(|e| log::warn!("offline video weather: {e:#}")).ok();
+    // Today's and tomorrow's forecast under the calendar, with a recent saved value as fallback.
+    let weather = crate::sources::weather::fetch().inspect_err(|e| log::warn!("offline video weather: {e:#}"))
+        .ok().or_else(|| crate::sources::weather::cached().map(|c| c.weather));
     let clips = clips();
     if !clips.is_empty() {
         return build_clips(now, weather.as_ref(), &clips);

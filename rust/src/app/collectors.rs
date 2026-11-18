@@ -1,8 +1,9 @@
 //! Background threads that keep the shared state fresh: hardware every second, weather every
 //! 10 minutes, AI plan usage on its own schedule per service.
 
+use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use super::Shared;
 use crate::agent_status::Source;
@@ -16,6 +17,67 @@ const AI_IDLE: Duration = Duration::from_secs(300);
 const AI_ACTIVE: Duration = Duration::from_secs(30);
 const AI_MIN: Duration = Duration::from_secs(15);
 const WEATHER_INTERVAL: Duration = Duration::from_secs(600);
+
+#[derive(Default)]
+struct WeatherRetry {
+    failures: usize,
+}
+
+impl WeatherRetry {
+    fn after(&mut self, success: bool) -> Duration {
+        if success {
+            self.failures = 0;
+            return WEATHER_INTERVAL;
+        }
+        self.failures = self.failures.saturating_add(1);
+        match self.failures {
+            1 => Duration::from_secs(60),
+            2 => Duration::from_secs(120),
+            3 => Duration::from_secs(300),
+            _ => WEATHER_INTERVAL,
+        }
+    }
+}
+
+/// Restore immediately, retry failed requests sooner, and expire even during a stalled fetch.
+fn weather_collector(st: &Shared) {
+    let cached = weather::cached();
+    let fetched_at = Arc::new(Mutex::new(cached.as_ref().map(|c| c.fetched_at)));
+    if let Some(cached) = cached {
+        st.lock().unwrap().weather = Some(cached.weather);
+    }
+    let (s, last) = (st.clone(), fetched_at.clone());
+    every("weather expiry", Duration::from_secs(1), Duration::ZERO, move || {
+        let mut last = last.lock().unwrap();
+        if last.is_some_and(|at| !weather::cache_fresh(at, SystemTime::now())) {
+            s.lock().unwrap().weather = None;
+            *last = None;
+        }
+    });
+    let s = st.clone();
+    thread::Builder::new().name("weather".into()).spawn(move || {
+        let mut retry = WeatherRetry::default();
+        loop {
+            let success = match weather::fetch() {
+                Ok(w) => {
+                    if retry.failures > 0 {
+                        log::info!("weather back after {} failures", retry.failures);
+                    }
+                    // Same lock order as expiry; a new value cannot be cleared as an old one.
+                    let mut last = fetched_at.lock().unwrap();
+                    *last = Some(SystemTime::now());
+                    s.lock().unwrap().weather = Some(w);
+                    true
+                }
+                Err(e) => {
+                    log::warn!("weather failed: {e:#}");
+                    false
+                }
+            };
+            thread::sleep(retry.after(success));
+        }
+    }).expect("spawn weather thread");
+}
 
 /// Run `f` now (after `first_delay`) and then every `interval`, forever, on its own thread.
 pub(super) fn every(name: &'static str, interval: Duration, first_delay: Duration, mut f: impl FnMut() + Send + 'static) {
@@ -117,11 +179,7 @@ pub fn start_collectors(st: &Shared, ai_enabled: bool) {
         g.hw = h;
     });
 
-    let s = st.clone();
-    every("weather", WEATHER_INTERVAL, Duration::ZERO, move || match weather::fetch() {
-        Ok(w) => s.lock().unwrap().weather = Some(w),
-        Err(e) => log::warn!("weather failed: {e:#}"),
-    });
+    weather_collector(st);
 
     if !ai_enabled {
         return; // --no-ai: test runs without touching credentials
@@ -166,5 +224,33 @@ pub fn start_collectors(st: &Shared, ai_enabled: bool) {
     if on.antigravity {
         let mut agy = Antigravity::new();
         usage_collector(st, &cache, "Antigravity", Source::Antigravity, move || agy.fetch());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn weather_retry_schedule() {
+        let mut retry = WeatherRetry::default();
+        for minutes in [1, 2, 5, 10, 10] {
+            assert_eq!(retry.after(false), Duration::from_secs(minutes * 60));
+        }
+        assert_eq!(retry.failures, 5);
+    }
+
+    #[test]
+    fn weather_retry_resets_on_success() {
+        let mut retry = WeatherRetry::default();
+        for _ in 0..4 {
+            retry.after(false);
+        }
+        assert_eq!(retry.after(true), WEATHER_INTERVAL);
+        assert_eq!(retry.failures, 0);
+        assert_eq!(retry.after(false), Duration::from_secs(60));
+        assert_eq!(retry.after(true), WEATHER_INTERVAL);
+        assert_eq!(retry.after(true), WEATHER_INTERVAL);
+        assert_eq!(retry.failures, 0);
     }
 }
